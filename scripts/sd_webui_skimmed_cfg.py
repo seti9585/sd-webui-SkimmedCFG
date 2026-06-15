@@ -94,10 +94,12 @@ class SkimmedCFGScript(scripts.Script):
             # Replace has no extra params — group not needed
 
             def _update_visibility(m):
+                # gr.update() works on both Gradio 3.x (reForge) and 4.x (Forge Neo).
+                # gr.Group.update() was removed in Gradio 4.x.
                 return (
-                    gr.Group.update(visible=(m == "Single Scale")),
-                    gr.Group.update(visible=(m == "Linear Interpolation")),
-                    gr.Group.update(visible=(m == "Dual Scales")),
+                    gr.update(visible=(m == "Single Scale")),
+                    gr.update(visible=(m == "Linear Interpolation")),
+                    gr.update(visible=(m == "Dual Scales")),
                 )
 
             mode.change(

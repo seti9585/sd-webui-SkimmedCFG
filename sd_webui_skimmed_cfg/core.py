@@ -3,15 +3,27 @@ sd_webui_skimmed_cfg/core.py
 ============================
 Skimmed CFG core algorithm.
 
-Based on the latest original by Extraltodeus:
-    https://github.com/Extraltodeus/Skimmed_CFG
+Based on:
+    Extraltodeus/Skimmed_CFG (original, latest)
+    Panchovix/reForge-SkimmedCFG (reForge port, older)
 
 Key fixes vs reForge built-in:
     1. Single Scale: cond pass now uses (cond_scale - 1) instead of cond_scale
     2. Linear Interpolation / Dual Scales: division-by-zero protection for CFG=1
+
+Backend-adaptive hooking (same pattern as sd-webui-TCFG):
+    * reForge / Forge Classic -> Pre-CFG  (dict args, "conds_out" style)
+    * Forge Neo               -> Post-CFG (dict args, "denoised" style;
+                                  Forge Neo's pre-CFG runs before model
+                                  evaluation, so cond/uncond predictions are
+                                  not available there)
 """
 
+import logging
+
 import torch
+
+logger = logging.getLogger(__name__)
 
 MARKER = "sd_webui_skimmed_cfg_v1"
 
@@ -25,7 +37,46 @@ _BUILTIN_QUALNAMES = {
 
 
 # ---------------------------------------------------------------------------
-# Core functions (identical to original)
+# Backend detection (identical logic to sd-webui-TCFG)
+# ---------------------------------------------------------------------------
+
+_BACKEND_IS_NEO = None  # cached
+
+
+def _is_forge_neo_backend() -> bool:
+    """
+    Return True if the active backend is Forge Neo.
+
+    Forge Neo's sampler_pre_cfg_function is called BEFORE model evaluation as
+    fn(model, cond, uncond_, x, timestep, model_options) — denoised predictions
+    are not available there. On reForge / Forge Classic the hook receives a
+    single dict whose "conds_out" already holds the predictions.
+
+    Detection: Forge Neo ships backend.sampling.sampling_function with
+    sampling_function_inner and calc_cond_uncond_batch; reForge / Classic use
+    ldm_patched.modules.samplers instead.
+    """
+    global _BACKEND_IS_NEO
+    if _BACKEND_IS_NEO is not None:
+        return _BACKEND_IS_NEO
+
+    is_neo = False
+    try:
+        from backend.sampling import sampling_function as _sf
+        is_neo = (
+            hasattr(_sf, "sampling_function_inner")
+            and hasattr(_sf, "calc_cond_uncond_batch")
+        )
+    except Exception:
+        is_neo = False
+
+    _BACKEND_IS_NEO = is_neo
+    logger.debug("[SkimmedCFG] backend detected: %s", "Forge Neo" if is_neo else "reForge / Forge Classic")
+    return is_neo
+
+
+# ---------------------------------------------------------------------------
+# Core algorithm functions
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -69,14 +120,11 @@ def skimmed_CFG(
 
 
 # ---------------------------------------------------------------------------
-# Pre-CFG function factories (one per mode)
+# Pre-CFG factories  (reForge / Forge Classic)
 # ---------------------------------------------------------------------------
 
 def _make_single_scale_fn(skimming_cfg: float, full_skim_negative: bool, disable_flipping_filter: bool):
-    """
-    Single Scale mode.
-    FIX vs reForge built-in: cond pass uses (cond_scale - 1), matching original latest.
-    """
+    """Single Scale — Pre-CFG (dict / conds_out style)."""
     @torch.no_grad()
     def _fn(args):
         conds_out  = args["conds_out"]
@@ -88,14 +136,13 @@ def _make_single_scale_fn(skimming_cfg: float, full_skim_negative: bool, disable
 
         practical_scale = cond_scale if skimming_cfg < 0 else skimming_cfg
 
-        # uncond pass
         conds_out[1] = skimmed_CFG(
             x_orig, conds_out[1], conds_out[0],
             cond_scale,
             practical_scale if not full_skim_negative else 0,
             disable_flipping_filter,
         )
-        # cond pass — FIX: use (cond_scale - 1)
+        # FIX: cond pass uses (cond_scale - 1)
         conds_out[0] = skimmed_CFG(
             x_orig, conds_out[0], conds_out[1],
             cond_scale - 1,
@@ -109,7 +156,7 @@ def _make_single_scale_fn(skimming_cfg: float, full_skim_negative: bool, disable
 
 
 def _make_replace_fn():
-    """Replace mode: uncond is replaced by cond in skimmed regions."""
+    """Replace — Pre-CFG (dict / conds_out style)."""
     @torch.no_grad()
     def _fn(args):
         conds_out  = args["conds_out"]
@@ -135,10 +182,7 @@ def _make_replace_fn():
 
 
 def _make_lin_interp_fn(skimming_cfg: float):
-    """
-    Linear Interpolation mode.
-    FIX vs reForge built-in: division-by-zero protection when CFG=1.
-    """
+    """Linear Interpolation — Pre-CFG (dict / conds_out style)."""
     @torch.no_grad()
     def _fn(args):
         conds_out  = args["conds_out"]
@@ -147,7 +191,7 @@ def _make_lin_interp_fn(skimming_cfg: float):
 
         if not torch.any(conds_out[1]):
             return conds_out
-        if cond_scale <= 1:  # FIX: prevent division by zero
+        if cond_scale <= 1:
             return conds_out
 
         fallback_weight = (skimming_cfg - 1) / (cond_scale - 1)
@@ -171,10 +215,7 @@ def _make_lin_interp_fn(skimming_cfg: float):
 
 
 def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: float):
-    """
-    Dual Scales mode.
-    FIX vs reForge built-in: division-by-zero protection when CFG=1.
-    """
+    """Dual Scales — Pre-CFG (dict / conds_out style)."""
     @torch.no_grad()
     def _fn(args):
         conds_out  = args["conds_out"]
@@ -183,7 +224,7 @@ def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: fl
 
         if not torch.any(conds_out[1]):
             return conds_out
-        if cond_scale <= 1:  # FIX: prevent division by zero
+        if cond_scale <= 1:
             return conds_out
 
         fallback_weight_positive = (skimming_cfg_positive - 1) / (cond_scale - 1)
@@ -208,6 +249,153 @@ def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: fl
 
 
 # ---------------------------------------------------------------------------
+# Post-CFG factories  (Forge Neo)
+# ---------------------------------------------------------------------------
+# Forge Neo post-CFG args dict keys:
+#   "denoised"        — current CFG result (x0 estimate)
+#   "cond_denoised"   — positive prediction
+#   "uncond_denoised" — negative prediction (None when CFG=1 / uncond disabled)
+#   "cond_scale"      — CFG scale
+#   "input"           — x_t (noisy latent)
+#
+# Each factory mirrors its Pre-CFG counterpart: damp cond/uncond the same way,
+# then recompute CFG linearly:
+#   denoised = uncond_skimmed + cond_scale * (cond_skimmed - uncond_skimmed)
+# ---------------------------------------------------------------------------
+
+def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, disable_flipping_filter: bool):
+    """Single Scale — Post-CFG (Forge Neo)."""
+    @torch.no_grad()
+    def _fn(args):
+        uncond_denoised = args.get("uncond_denoised")
+        if uncond_denoised is None or not torch.any(uncond_denoised):
+            return args["denoised"]
+
+        x_orig     = args["input"]
+        cond_scale = args["cond_scale"]
+        # clone to avoid mutating the tensors that downstream hooks may read
+        cond   = args["cond_denoised"].clone()
+        uncond = uncond_denoised.clone()
+
+        practical_scale = cond_scale if skimming_cfg < 0 else skimming_cfg
+
+        uncond = skimmed_CFG(
+            x_orig, uncond, cond,
+            cond_scale,
+            practical_scale if not full_skim_negative else 0,
+            disable_flipping_filter,
+        )
+        cond = skimmed_CFG(
+            x_orig, cond, uncond,
+            cond_scale - 1,
+            practical_scale,
+            disable_flipping_filter,
+        )
+        return uncond + cond_scale * (cond - uncond)
+
+    _fn._sd_webui_skimmed_cfg_marker = MARKER
+    return _fn
+
+
+def _make_replace_post_fn():
+    """Replace — Post-CFG (Forge Neo)."""
+    @torch.no_grad()
+    def _fn(args):
+        uncond_denoised = args.get("uncond_denoised")
+        if uncond_denoised is None or not torch.any(uncond_denoised):
+            return args["denoised"]
+
+        x_orig     = args["input"]
+        cond_scale = args["cond_scale"]
+        cond   = args["cond_denoised"].clone()
+        uncond = uncond_denoised.clone()
+
+        skim_mask = get_skimming_mask(x_orig, cond, uncond, cond_scale)
+        uncond[skim_mask] = cond[skim_mask]
+
+        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale)
+        uncond[skim_mask] = cond[skim_mask]
+
+        return uncond + cond_scale * (cond - uncond)
+
+    _fn._sd_webui_skimmed_cfg_marker = MARKER
+    return _fn
+
+
+def _make_lin_interp_post_fn(skimming_cfg: float):
+    """Linear Interpolation — Post-CFG (Forge Neo)."""
+    @torch.no_grad()
+    def _fn(args):
+        uncond_denoised = args.get("uncond_denoised")
+        if uncond_denoised is None or not torch.any(uncond_denoised):
+            return args["denoised"]
+
+        cond_scale = args["cond_scale"]
+        if cond_scale <= 1:
+            return args["denoised"]
+
+        x_orig = args["input"]
+        cond   = args["cond_denoised"]
+        uncond = uncond_denoised.clone()
+
+        fallback_weight = (skimming_cfg - 1) / (cond_scale - 1)
+
+        skim_mask = get_skimming_mask(x_orig, cond, uncond, cond_scale)
+        uncond[skim_mask] = (
+            cond[skim_mask] * (1 - fallback_weight)
+            + uncond[skim_mask] * fallback_weight
+        )
+
+        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale)
+        uncond[skim_mask] = (
+            cond[skim_mask] * (1 - fallback_weight)
+            + uncond[skim_mask] * fallback_weight
+        )
+
+        return uncond + cond_scale * (cond - uncond)
+
+    _fn._sd_webui_skimmed_cfg_marker = MARKER
+    return _fn
+
+
+def _make_dual_scales_post_fn(skimming_cfg_positive: float, skimming_cfg_negative: float):
+    """Dual Scales — Post-CFG (Forge Neo)."""
+    @torch.no_grad()
+    def _fn(args):
+        uncond_denoised = args.get("uncond_denoised")
+        if uncond_denoised is None or not torch.any(uncond_denoised):
+            return args["denoised"]
+
+        cond_scale = args["cond_scale"]
+        if cond_scale <= 1:
+            return args["denoised"]
+
+        x_orig = args["input"]
+        cond   = args["cond_denoised"]
+        uncond = uncond_denoised.clone()
+
+        fallback_weight_positive = (skimming_cfg_positive - 1) / (cond_scale - 1)
+        fallback_weight_negative = (skimming_cfg_negative - 1) / (cond_scale - 1)
+
+        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale)
+        uncond[skim_mask] = (
+            cond[skim_mask] * (1 - fallback_weight_negative)
+            + uncond[skim_mask] * fallback_weight_negative
+        )
+
+        skim_mask = get_skimming_mask(x_orig, cond, uncond, cond_scale)
+        uncond[skim_mask] = (
+            cond[skim_mask] * (1 - fallback_weight_positive)
+            + uncond[skim_mask] * fallback_weight_positive
+        )
+
+        return uncond + cond_scale * (cond - uncond)
+
+    _fn._sd_webui_skimmed_cfg_marker = MARKER
+    return _fn
+
+
+# ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
 
@@ -221,34 +409,61 @@ def _is_skimmed_cfg_fn(fn) -> bool:
 
 
 def remove_skimmed_cfg_patches(unet) -> None:
-    """Remove all SkimmedCFG pre_cfg_function patches from unet."""
-    key = "sampler_pre_cfg_function"
-    existing = unet.model_options.get(key, [])
-    if isinstance(existing, list):
-        unet.model_options[key] = [fn for fn in existing if not _is_skimmed_cfg_fn(fn)]
+    """Remove all SkimmedCFG patches from both pre- and post-CFG lists."""
+    for key in ("sampler_pre_cfg_function", "sampler_post_cfg_function"):
+        existing = unet.model_options.get(key)
+        if isinstance(existing, list):
+            unet.model_options[key] = [fn for fn in existing if not _is_skimmed_cfg_fn(fn)]
 
 
 def apply_skimmed_cfg(unet, mode: str, **kwargs):
-    """Apply SkimmedCFG pre_cfg_function (removes any existing first)."""
+    """
+    Register SkimmedCFG on unet, choosing the correct hook for the active backend.
+
+      * Forge Neo             -> Post-CFG, front-inserted so it runs before
+                                 MaHiRo and other post-CFG hooks.
+      * reForge / Forge Classic -> Pre-CFG (original behaviour).
+    """
     remove_skimmed_cfg_patches(unet)
 
+    # --- build the right function for the requested mode ---
     if mode == "single_scale":
-        fn = _make_single_scale_fn(
+        pre_fn  = _make_single_scale_fn(
+            kwargs["skimming_cfg"],
+            kwargs["full_skim_negative"],
+            kwargs["disable_flipping_filter"],
+        )
+        post_fn = _make_single_scale_post_fn(
             kwargs["skimming_cfg"],
             kwargs["full_skim_negative"],
             kwargs["disable_flipping_filter"],
         )
     elif mode == "replace":
-        fn = _make_replace_fn()
+        pre_fn  = _make_replace_fn()
+        post_fn = _make_replace_post_fn()
     elif mode == "lin_interp":
-        fn = _make_lin_interp_fn(kwargs["skimming_cfg"])
+        pre_fn  = _make_lin_interp_fn(kwargs["skimming_cfg"])
+        post_fn = _make_lin_interp_post_fn(kwargs["skimming_cfg"])
     elif mode == "dual_scales":
-        fn = _make_dual_scales_fn(
+        pre_fn  = _make_dual_scales_fn(
+            kwargs["skimming_cfg_positive"],
+            kwargs["skimming_cfg_negative"],
+        )
+        post_fn = _make_dual_scales_post_fn(
             kwargs["skimming_cfg_positive"],
             kwargs["skimming_cfg_negative"],
         )
     else:
         raise ValueError(f"Unknown SkimmedCFG mode: {mode!r}")
 
-    unet.set_model_sampler_pre_cfg_function(fn)
+    if _is_forge_neo_backend():
+        # Front-insert so SkimmedCFG runs before MaHiRo / other post-CFG hooks.
+        key = "sampler_post_cfg_function"
+        existing = [fn for fn in unet.model_options.get(key, []) if not _is_skimmed_cfg_fn(fn)]
+        unet.model_options[key] = [post_fn] + existing
+        logger.debug("[SkimmedCFG] registered post-CFG hook (Forge Neo backend), mode=%s", mode)
+    else:
+        unet.set_model_sampler_pre_cfg_function(pre_fn)
+        logger.debug("[SkimmedCFG] registered pre-CFG hook (reForge / Forge Classic), mode=%s", mode)
+
     return unet
