@@ -28,7 +28,7 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 | **Single Scale** | Basic skimming. Pulls over-influenced values toward the skimming scale. | Skimming CFG (−1 = use current CFG), Full Skim Negative, Disable Flipping Filter |
 | **Replace** | Replaces uncond values with cond values in skimmed regions (effective scale 1 there). | — |
 | **Linear Interpolation** | Interpolates between values instead of replacing. Recommended by the original author. | Skimming CFG |
-| **Dual Scales** | Two independent scales — higher *Positive* leans toward saturation; *Negative* the opposite. | Skimming CFG Positive / Negative |
+| **Dual Scales** | Two independent scales for cond and uncond passes. | Skimming CFG Positive / Negative |
 
 ---
 
@@ -44,6 +44,39 @@ The skimming scale is, in the original author's words, "how much do you like the
 
 Side effects: better prompt adherence, sharper images, fewer positive/negative conflicts.  
 Very low scales with too few steps can occasionally fuse details.
+
+---
+
+## Parameters (Single Scale)
+
+### Full Skim Negative
+
+Forces the skimming scale to **0** on the uncond pass only, while the cond pass continues using the normal skimming scale. This maximally suppresses the uncond component in masked regions — effectively removing its outward push where it over-influences the result. Use when standard skimming still leaves burn at very high CFG.
+
+### Disable Flipping Filter
+
+The default mask uses three conditions (AND):
+
+1. `sign(cond − uncond) == sign(cond)` — guidance and cond point in the same direction
+2. `sign(cond) == sign(cond·cfg − uncond·(cfg−1))` — the element survives CFG amplification without sign flip
+3. `sign(denoised) == sign(denoised − x_t)` — **flipping filter**: denoised is drifting outward from the noisy input
+
+Enabling **Disable Flipping Filter** removes condition 3, widening the mask to all elements satisfying conditions 1 and 2. This applies skimming more aggressively. Try it when the default mask is too conservative.
+
+---
+
+## Parameters (Dual Scales)
+
+Dual Scales assigns separate skimming scales to the cond and uncond passes:
+
+- **uncond pass** uses **Skimming CFG Negative**
+- **cond pass** uses **Skimming CFG Positive**
+
+**Skimming CFG Positive** controls how strongly over-influenced *cond* values are pulled back. Lowering it suppresses the prompt-driven component, making the result less saturated and more subdued.
+
+**Skimming CFG Negative** controls how strongly over-influenced *uncond* values are pulled back. Lowering it reduces the outward push from the negative prompt, softening its influence in masked regions.
+
+Typical use: keep Positive near the CFG scale to preserve prompt adherence; lower Negative to suppress burn caused by the uncond component without affecting positive guidance.
 
 ---
 
@@ -71,12 +104,26 @@ mask = sign(cond − uncond) == sign(cond)
      & sign(cond) == sign(cond·cfg − uncond·(cfg − 1))
      & sign(denoised) == sign(denoised − x)     # flipping filter (optional)
 
-low       = cfg(x, cond, uncond, skimming_scale)
-denoised  = cfg(x, cond, uncond, cfg_scale)
+low        = cfg(x, cond, uncond, skimming_scale)
+denoised   = cfg(x, cond, uncond, cfg_scale)
 cond[mask] −= (denoised − low)[mask] / cfg_scale
 ```
 
 Only "over-influenced" values — those that blow out at high CFG — are pulled back toward the skimming scale; all others retain the full CFG.
+
+In practice (verified on reForge + SDXL, CFG 30, 35 steps), roughly **40–44 % of elements** are masked per step. The norm change per step is small (Δ ≈ −0.02 to −0.10) because only masked elements are touched, but the cumulative effect is sufficient to recover usable quality from otherwise broken high-CFG images.
+
+---
+
+## Compatibility with other extensions
+
+Tested together with **TCFG** and **MaHiRo**. The execution order on reForge is:
+
+```
+TCFG (Pre-CFG, priority 13) → SkimmedCFG (Pre-CFG, priority 14) → CFG → MaHiRo (Post-CFG, priority 15.5)
+```
+
+No conflicts observed. When stacking multiple CFG-axis extensions, keep CFG at **7–15**; values above 20 can cause cumulative overcorrection.
 
 ---
 
@@ -120,7 +167,7 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 | **Single Scale** | 基本のスキミング。過剰な値をスキミングスケールへ引き戻します。 | Skimming CFG（−1 で現在の CFG を使用）、Full Skim Negative、Disable Flipping Filter |
 | **Replace** | スキム対象領域で uncond を cond に置き換えます（その領域は実効スケール 1）。 | — |
 | **Linear Interpolation** | 置き換えではなく値を線形補間します。原作者の推奨モード。 | Skimming CFG |
-| **Dual Scales** | 2 つの独立したスケール。*Positive* を上げると高彩度方向、*Negative* は逆方向。 | Skimming CFG Positive / Negative |
+| **Dual Scales** | cond パスと uncond パスに個別のスケールを指定できます。 | Skimming CFG Positive / Negative |
 
 ---
 
@@ -136,6 +183,39 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 
 副作用：プロンプト追従の向上、よりシャープな画像、ポジ／ネガの衝突の減少。  
 スケールが低すぎてステップ数も少ない場合、ディテールが稀に融合することがあります。
+
+---
+
+## パラメータ詳細（Single Scale）
+
+### Full Skim Negative
+
+uncond パスのスキミングスケールを強制的に **0** にします（cond パスは通常通り）。マスクが当たった領域の uncond 成分を最大限に抑制し、外側へ引っ張る力をほぼゼロにします。通常のスキミングでも高 CFG の破綻が止まらない場合に試してください。
+
+### Disable Flipping Filter
+
+デフォルトのマスクは以下の 3 条件の AND で決まります：
+
+1. `sign(cond − uncond) == sign(cond)` — ガイダンスと cond が同じ方向を向いている
+2. `sign(cond) == sign(cond·cfg − uncond·(cfg−1))` — CFG 増幅後も符号が反転しない（外れ値方向に安定している）
+3. `sign(denoised) == sign(denoised − x_t)` — **フリッピングフィルタ**：denoised がノイズ入力から外側へ逸脱している
+
+**Disable Flipping Filter** を有効にすると条件 3 を外し、マスクを条件 1・2 だけで決定します。補正対象が広がり、より積極的に抑制します。デフォルトのマスクが保守的すぎると感じたときに試してください。
+
+---
+
+## パラメータ詳細（Dual Scales）
+
+Dual Scales では cond パスと uncond パスに別々のスキミングスケールを指定します：
+
+- **uncond パス** → **Skimming CFG Negative** を使用
+- **cond パス** → **Skimming CFG Positive** を使用
+
+**Skimming CFG Positive** は、過剰な *cond* 値をどこまで引き戻すかを決めます。下げるとプロンプト駆動の成分が抑えられ、全体が落ち着いた印象になります。
+
+**Skimming CFG Negative** は、過剰な *uncond* 値をどこまで引き戻すかを決めます。下げるとネガティブプロンプトの押し返し力が和らぎ、マスク領域での過剰な影響を抑えます。
+
+典型的な使い方：Positive は CFG scale に近い値を保ってプロンプト追従を維持しつつ、Negative を下げて uncond 起因の破綻だけを抑える。
 
 ---
 
@@ -163,12 +243,26 @@ mask = sign(cond − uncond) == sign(cond)
      & sign(cond) == sign(cond·cfg − uncond·(cfg − 1))
      & sign(denoised) == sign(denoised − x)     # フリッピングフィルタ（任意）
 
-low       = cfg(x, cond, uncond, skimming_scale)
-denoised  = cfg(x, cond, uncond, cfg_scale)
+low        = cfg(x, cond, uncond, skimming_scale)
+denoised   = cfg(x, cond, uncond, cfg_scale)
 cond[mask] −= (denoised − low)[mask] / cfg_scale
 ```
 
 高 CFG で破綻する「過剰に影響した値」だけをスキミングスケールへ引き戻し、それ以外はフル CFG を維持します。
+
+実測値（reForge + SDXL、CFG 30、35 ステップ）では、**1 ステップあたり約 40〜44 % の要素**にマスクが当たります。ステップごとのノルム変化は小さい（Δ ≈ −0.02〜−0.10）ですが、これはマスクが当たった要素だけを局所的に修正する設計によるものです。累積効果として、通常では破綻する高 CFG 画像を実用品質に回復させることを確認しています。
+
+---
+
+## 他拡張との併用
+
+**TCFG**・**MaHiRo** との同時使用を確認済みです。reForge での実行順序：
+
+```
+TCFG（Pre-CFG、priority 13）→ SkimmedCFG（Pre-CFG、priority 14）→ CFG → MaHiRo（Post-CFG、priority 15.5）
+```
+
+干渉は確認されていません。CFG 軸の拡張を複数重ねる場合は **CFG 7〜15** 以内を推奨します。20 以上では累積補正が大きくなる場合があります。
 
 ---
 
