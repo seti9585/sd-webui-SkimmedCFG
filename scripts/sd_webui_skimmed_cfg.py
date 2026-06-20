@@ -163,10 +163,21 @@ class SkimmedCFGScript(scripts.Script):
 
         p.sd_model.forge_objects.unet = unet
 
-        p.extra_generation_params.update({
-            "skimmed_cfg": self.mode,
-        })
-        logger.debug("[SkimmedCFG] applied: mode=%s", self.mode)
+        params = {"Skimmed CFG Mode": self.mode}
+
+        if mode_key == "single_scale":
+            params["Skimmed CFG Scale"]         = float(skimming_cfg)
+            params["Skimmed CFG Full Skim Neg"] = bool(full_skim_negative)
+            params["Skimmed CFG Disable Flip"]  = bool(disable_flip_filter)
+        elif mode_key == "lin_interp":
+            params["Skimmed CFG Scale"]         = float(lin_interp_cfg)
+        elif mode_key == "dual_scales":
+            params["Skimmed CFG Scale Pos"]     = float(dual_cfg_pos)
+            params["Skimmed CFG Scale Neg"]     = float(dual_cfg_neg)
+        # "replace" has no additional parameters
+
+        p.extra_generation_params.update(params)
+        logger.debug("[SkimmedCFG] applied: mode=%s params=%s", self.mode, params)
 
 
 # ---------------------------------------------------------------------------
