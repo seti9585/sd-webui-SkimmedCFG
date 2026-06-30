@@ -38,9 +38,40 @@ logger = logging.getLogger(__name__)
 
 _MODES = ["Single Scale", "Replace", "Linear Interpolation", "Dual Scales"]
 
+_MODE_KEY = {
+    "Single Scale":         "single_scale",
+    "Replace":              "replace",
+    "Linear Interpolation": "lin_interp",
+    "Dual Scales":          "dual_scales",
+}
+
 
 def _has_forge_backend(p) -> bool:
     return hasattr(p, "sd_model") and hasattr(p.sd_model, "forge_objects")
+
+
+def _build_infotext_params(cfg: dict) -> dict:
+    """Build the infotext key/value dict for the active mode.
+
+    Keys are kept identical to previous versions so already-generated PNGs keep
+    round-tripping. Note that "Skimmed CFG Scale" is intentionally shared by the
+    Single Scale and Linear Interpolation modes; the read side disambiguates it
+    by "Skimmed CFG Mode" (see infotext_fields in ui()).
+    """
+    mode_key = _MODE_KEY.get(cfg["mode"], "single_scale")
+    params = {"Skimmed CFG Mode": cfg["mode"]}
+
+    if mode_key == "single_scale":
+        params["Skimmed CFG Scale"]         = cfg["skimming_cfg"]
+        params["Skimmed CFG Full Skim Neg"] = cfg["full_skim_negative"]
+        params["Skimmed CFG Disable Flip"]  = cfg["disable_flip_filter"]
+    elif mode_key == "lin_interp":
+        params["Skimmed CFG Scale"]         = cfg["lin_interp_cfg"]
+    elif mode_key == "dual_scales":
+        params["Skimmed CFG Scale Pos"]     = cfg["dual_cfg_pos"]
+        params["Skimmed CFG Scale Neg"]     = cfg["dual_cfg_neg"]
+    # "replace" has no additional parameters
+    return params
 
 
 # ---------------------------------------------------------------------------
@@ -108,33 +139,96 @@ class SkimmedCFGScript(scripts.Script):
                 outputs=[grp_single, grp_lin, grp_dual],
             )
 
+        # Infotext round-trip (PNG Info -> Send to txt2img / img2img).
+        # Metadata is written in process() (see below). Notes on the bindings:
+        #   - Enable: there is no dedicated enabled key; "Skimmed CFG Mode" is
+        #     written only when active, so its presence means ON, absence OFF.
+        #   - "Skimmed CFG Scale" is shared by Single Scale and Linear
+        #     Interpolation, so each slider uses a Mode-gated callable: it returns
+        #     None (component left untouched) unless the stored Mode is its own.
+        #   - Unambiguous keys use plain strings; bool coercion is handled by the
+        #     paste layer. Absent keys leave the component untouched, which is why
+        #     Enable must be a callable (so a missing key forces OFF).
+        #   - The group visibility is driven from Mode so the correct sub-panel
+        #     opens on paste (mode.change does not fire on a programmatic paste);
+        #     it defaults to Single Scale when Mode is absent, matching init state.
+        self.infotext_fields = [
+            (enabled, lambda d: "Skimmed CFG Mode" in d),
+            (mode,    "Skimmed CFG Mode"),
+
+            (skimming_cfg,
+             lambda d: d.get("Skimmed CFG Scale") if d.get("Skimmed CFG Mode") == "Single Scale" else None),
+            (lin_interp_cfg,
+             lambda d: d.get("Skimmed CFG Scale") if d.get("Skimmed CFG Mode") == "Linear Interpolation" else None),
+
+            (full_skim_negative,  "Skimmed CFG Full Skim Neg"),
+            (disable_flip_filter, "Skimmed CFG Disable Flip"),
+            (dual_cfg_pos,        "Skimmed CFG Scale Pos"),
+            (dual_cfg_neg,        "Skimmed CFG Scale Neg"),
+
+            (grp_single, lambda d: gr.update(visible=(d.get("Skimmed CFG Mode", "Single Scale") == "Single Scale"))),
+            (grp_lin,    lambda d: gr.update(visible=(d.get("Skimmed CFG Mode") == "Linear Interpolation"))),
+            (grp_dual,   lambda d: gr.update(visible=(d.get("Skimmed CFG Mode") == "Dual Scales"))),
+        ]
+
         return [enabled, mode,
                 skimming_cfg, full_skim_negative, disable_flip_filter,
                 lin_interp_cfg,
                 dual_cfg_pos, dual_cfg_neg]
 
     # ------------------------------------------------------------------
-    # Sampling hook
+    # Effective configuration (UI args + XYZ Grid override)
+    # ------------------------------------------------------------------
+
+    def _resolve(self, p, args):
+        if len(args) < 8:
+            return None
+        (enabled, mode,
+         skimming_cfg, full_skim_negative, disable_flip_filter,
+         lin_interp_cfg,
+         dual_cfg_pos, dual_cfg_neg) = args[:8]
+
+        xyz = getattr(p, "_skimmed_cfg_xyz", {})
+        if "enabled" in xyz:
+            enabled = (xyz["enabled"] == "True")
+        if "mode" in xyz:
+            mode = xyz["mode"]
+
+        return {
+            "enabled":             bool(enabled),
+            "mode":                mode,
+            "skimming_cfg":        float(skimming_cfg),
+            "full_skim_negative":  bool(full_skim_negative),
+            "disable_flip_filter": bool(disable_flip_filter),
+            "lin_interp_cfg":      float(lin_interp_cfg),
+            "dual_cfg_pos":        float(dual_cfg_pos),
+            "dual_cfg_neg":        float(dual_cfg_neg),
+        }
+
+    # ------------------------------------------------------------------
+    # Metadata write (runs once before sampling so create_infotext captures it)
+    # ------------------------------------------------------------------
+
+    def process(self, p, *args):
+        cfg = self._resolve(p, args)
+        if cfg is None or not cfg["enabled"]:
+            return
+        p.extra_generation_params.update(_build_infotext_params(cfg))
+
+    # ------------------------------------------------------------------
+    # Hook application (correct timing for forge_objects.unet)
     # ------------------------------------------------------------------
 
     def process_before_every_sampling(self, p, *args, **kwargs):
-        if len(args) >= 8:
-            (self.enabled, self.mode,
-             skimming_cfg, full_skim_negative, disable_flip_filter,
-             lin_interp_cfg,
-             dual_cfg_pos, dual_cfg_neg) = args[:8]
-        else:
+        cfg = self._resolve(p, args)
+        if cfg is None:
             logger.warning("[SkimmedCFG] process_before_every_sampling: missing args")
             return
 
-        # XYZ Grid
-        xyz = getattr(p, "_skimmed_cfg_xyz", {})
-        if "enabled" in xyz:
-            self.enabled = (xyz["enabled"] == "True")
-        if "mode" in xyz:
-            self.mode = xyz["mode"]
+        self.enabled = cfg["enabled"]
+        self.mode = cfg["mode"]
 
-        if not self.enabled:
+        if not cfg["enabled"]:
             return
 
         if not _has_forge_backend(p):
@@ -143,41 +237,21 @@ class SkimmedCFGScript(scripts.Script):
 
         unet = p.sd_model.forge_objects.unet.clone()
 
-        mode_key = {
-            "Single Scale":         "single_scale",
-            "Replace":              "replace",
-            "Linear Interpolation": "lin_interp",
-            "Dual Scales":          "dual_scales",
-        }.get(self.mode, "single_scale")
+        mode_key = _MODE_KEY.get(cfg["mode"], "single_scale")
 
         apply_skimmed_cfg(
             unet,
             mode_key,
-            skimming_cfg=float(skimming_cfg),
-            full_skim_negative=bool(full_skim_negative),
-            disable_flipping_filter=bool(disable_flip_filter),
-            lin_interp_cfg=float(lin_interp_cfg),
-            skimming_cfg_positive=float(dual_cfg_pos),
-            skimming_cfg_negative=float(dual_cfg_neg),
+            skimming_cfg=cfg["skimming_cfg"],
+            full_skim_negative=cfg["full_skim_negative"],
+            disable_flipping_filter=cfg["disable_flip_filter"],
+            lin_interp_cfg=cfg["lin_interp_cfg"],
+            skimming_cfg_positive=cfg["dual_cfg_pos"],
+            skimming_cfg_negative=cfg["dual_cfg_neg"],
         )
 
         p.sd_model.forge_objects.unet = unet
-
-        params = {"Skimmed CFG Mode": self.mode}
-
-        if mode_key == "single_scale":
-            params["Skimmed CFG Scale"]         = float(skimming_cfg)
-            params["Skimmed CFG Full Skim Neg"] = bool(full_skim_negative)
-            params["Skimmed CFG Disable Flip"]  = bool(disable_flip_filter)
-        elif mode_key == "lin_interp":
-            params["Skimmed CFG Scale"]         = float(lin_interp_cfg)
-        elif mode_key == "dual_scales":
-            params["Skimmed CFG Scale Pos"]     = float(dual_cfg_pos)
-            params["Skimmed CFG Scale Neg"]     = float(dual_cfg_neg)
-        # "replace" has no additional parameters
-
-        p.extra_generation_params.update(params)
-        logger.debug("[SkimmedCFG] applied: mode=%s params=%s", self.mode, params)
+        logger.debug("[SkimmedCFG] applied: mode=%s", cfg["mode"])
 
 
 # ---------------------------------------------------------------------------
