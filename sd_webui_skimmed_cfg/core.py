@@ -17,6 +17,20 @@ Backend-adaptive hooking (same pattern as sd-webui-TCFG):
                                   Forge Neo's pre-CFG runs before model
                                   evaluation, so cond/uncond predictions are
                                   not available there)
+
+Composition with TCFG on Forge Neo:
+    TCFG and SkimmedCFG both live in Forge Neo's single
+    sampler_post_cfg_function list. Forge Neo rebuilds the args dict fresh on
+    every hook call with the SAME raw cond_denoised / uncond_denoised
+    tensors each time, so TCFG cannot hand its damped uncond forward through
+    the normal "denoised" chain. Instead TCFG (priority 13.0, runs before
+    SkimmedCFG's 14.0 -- see _priority_insert_post_cfg) stashes its damped
+    uncond into model_options["_tcfg_damped_uncond"]. Each mode below reads
+    that key when present and falls back to the raw uncond_denoised
+    otherwise, so SkimmedCFG behaves identically whether or not TCFG is
+    enabled alongside it. This reproduces the reForge pipeline order
+    (TCFG's pre-cfg list entry runs before SkimmedCFG's) on a backend that
+    only exposes a single post-model-eval hook list.
 """
 
 import logging
@@ -26,6 +40,12 @@ import torch
 logger = logging.getLogger(__name__)
 
 MARKER = "sd_webui_skimmed_cfg_v1"
+
+# Mirrors SkimmedCFGScript.sorting_priority in scripts/sd_webui_skimmed_cfg.py.
+# Kept in sync manually; used only to order this extension's hook within
+# Forge Neo's sampler_post_cfg_function list relative to other SETI
+# extensions (TCFG=13.0 runs before this, MaHiRo=15.5 runs after).
+_PRIORITY = 14.0
 
 # Qualnames of the built-in reForge SkimmedCFG closures (for detection/removal)
 _BUILTIN_QUALNAMES = {
@@ -48,9 +68,9 @@ def _is_forge_neo_backend() -> bool:
     Return True if the active backend is Forge Neo.
 
     Forge Neo's sampler_pre_cfg_function is called BEFORE model evaluation as
-    fn(model, cond, uncond_, x, timestep, model_options) — denoised predictions
-    are not available there. On reForge / Forge Classic the hook receives a
-    single dict whose "conds_out" already holds the predictions.
+    fn(model, cond, uncond_, x, timestep, model_options) -- denoised
+    predictions are not available there. On reForge / Forge Classic the hook
+    receives a single dict whose "conds_out" already holds the predictions.
 
     Detection: Forge Neo ships backend.sampling.sampling_function with
     sampling_function_inner and calc_cond_uncond_batch; reForge / Classic use
@@ -73,6 +93,45 @@ def _is_forge_neo_backend() -> bool:
     _BACKEND_IS_NEO = is_neo
     logger.debug("[SkimmedCFG] backend detected: %s", "Forge Neo" if is_neo else "reForge / Forge Classic")
     return is_neo
+
+
+# ---------------------------------------------------------------------------
+# Priority-ordered insertion for Forge Neo's post-cfg list
+# ---------------------------------------------------------------------------
+
+def _priority_insert_post_cfg(unet, fn) -> None:
+    """
+    Insert fn into unet.model_options["sampler_post_cfg_function"] at the
+    position that keeps SETI-suite hooks (those carrying a _sd_webui_priority
+    attribute) in ascending priority order -- e.g. TCFG (13.0) before
+    SkimmedCFG (14.0) before MaHiRo (15.5) -- regardless of the order in
+    which their apply_*() functions happened to run this call. Third-party
+    hooks without that attribute are left exactly where they already are;
+    only the new fn's position relative to them is decided (inserted before
+    the first tracked hook with a strictly greater priority, otherwise
+    appended at the end).
+    """
+    key = "sampler_post_cfg_function"
+    existing = unet.model_options.get(key, [])
+    priority = fn._sd_webui_priority
+
+    insert_at = len(existing)
+    for i, other in enumerate(existing):
+        other_priority = getattr(other, "_sd_webui_priority", None)
+        if other_priority is not None and other_priority > priority:
+            insert_at = i
+            break
+
+    unet.model_options[key] = existing[:insert_at] + [fn] + existing[insert_at:]
+
+
+def _stashed_tcfg_uncond(args: dict):
+    """Return TCFG's damped uncond from model_options if TCFG ran earlier
+    in this same post-cfg call, else None."""
+    model_options = args.get("model_options")
+    if not isinstance(model_options, dict):
+        return None
+    return model_options.get("_tcfg_damped_uncond")
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +179,7 @@ def skimmed_CFG(
 
 
 # ---------------------------------------------------------------------------
-# Pre-CFG factories  (reForge / Forge Classic)
+# Pre-CFG factories  (reForge / Forge Classic) -- UNCHANGED
 # ---------------------------------------------------------------------------
 
 def _make_single_scale_fn(skimming_cfg: float, full_skim_negative: bool, disable_flipping_filter: bool):
@@ -253,14 +312,20 @@ def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: fl
 # ---------------------------------------------------------------------------
 # Forge Neo post-CFG args dict keys:
 #   "denoised"        — current CFG result (x0 estimate)
-#   "cond_denoised"   — positive prediction
-#   "uncond_denoised" — negative prediction (None when CFG=1 / uncond disabled)
-#   "cond_scale"      — CFG scale
-#   "input"           — x_t (noisy latent)
+#   "cond_denoised"    — positive prediction
+#   "uncond_denoised"  — negative prediction (None when CFG=1 / uncond disabled)
+#   "cond_scale"       — CFG scale
+#   "input"            — x_t (noisy latent)
+#   "model_options"    — shared dict; read for TCFG's stashed damped uncond
 #
-# Each factory mirrors its Pre-CFG counterpart: damp cond/uncond the same way,
-# then recompute CFG linearly:
+# Each factory mirrors its Pre-CFG counterpart: damp cond/uncond the same
+# way, then recompute CFG linearly:
 #   denoised = uncond_skimmed + cond_scale * (cond_skimmed - uncond_skimmed)
+#
+# If TCFG ran earlier in this same post-cfg list, its damped uncond is used
+# as the starting point instead of the raw uncond_denoised, reproducing the
+# reForge pipeline order (TCFG -> SkimmedCFG). If TCFG did not run (disabled
+# or not installed), behaviour is identical to before this change.
 # ---------------------------------------------------------------------------
 
 def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, disable_flipping_filter: bool):
@@ -273,9 +338,11 @@ def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, di
 
         x_orig     = args["input"]
         cond_scale = args["cond_scale"]
-        # clone to avoid mutating the tensors that downstream hooks may read
+        # clone to avoid mutating the tensors that downstream hooks (or the
+        # TCFG stash itself) may still read
         cond   = args["cond_denoised"].clone()
-        uncond = uncond_denoised.clone()
+        tcfg_uncond = _stashed_tcfg_uncond(args)
+        uncond = (tcfg_uncond if tcfg_uncond is not None else uncond_denoised).clone()
 
         practical_scale = cond_scale if skimming_cfg < 0 else skimming_cfg
 
@@ -294,6 +361,7 @@ def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, di
         return uncond + cond_scale * (cond - uncond)
 
     _fn._sd_webui_skimmed_cfg_marker = MARKER
+    _fn._sd_webui_priority = _PRIORITY
     return _fn
 
 
@@ -308,7 +376,8 @@ def _make_replace_post_fn():
         x_orig     = args["input"]
         cond_scale = args["cond_scale"]
         cond   = args["cond_denoised"].clone()
-        uncond = uncond_denoised.clone()
+        tcfg_uncond = _stashed_tcfg_uncond(args)
+        uncond = (tcfg_uncond if tcfg_uncond is not None else uncond_denoised).clone()
 
         skim_mask = get_skimming_mask(x_orig, cond, uncond, cond_scale)
         uncond[skim_mask] = cond[skim_mask]
@@ -319,6 +388,7 @@ def _make_replace_post_fn():
         return uncond + cond_scale * (cond - uncond)
 
     _fn._sd_webui_skimmed_cfg_marker = MARKER
+    _fn._sd_webui_priority = _PRIORITY
     return _fn
 
 
@@ -336,7 +406,8 @@ def _make_lin_interp_post_fn(skimming_cfg: float):
 
         x_orig = args["input"]
         cond   = args["cond_denoised"]
-        uncond = uncond_denoised.clone()
+        tcfg_uncond = _stashed_tcfg_uncond(args)
+        uncond = (tcfg_uncond if tcfg_uncond is not None else uncond_denoised).clone()
 
         fallback_weight = (skimming_cfg - 1) / (cond_scale - 1)
 
@@ -355,6 +426,7 @@ def _make_lin_interp_post_fn(skimming_cfg: float):
         return uncond + cond_scale * (cond - uncond)
 
     _fn._sd_webui_skimmed_cfg_marker = MARKER
+    _fn._sd_webui_priority = _PRIORITY
     return _fn
 
 
@@ -372,7 +444,8 @@ def _make_dual_scales_post_fn(skimming_cfg_positive: float, skimming_cfg_negativ
 
         x_orig = args["input"]
         cond   = args["cond_denoised"]
-        uncond = uncond_denoised.clone()
+        tcfg_uncond = _stashed_tcfg_uncond(args)
+        uncond = (tcfg_uncond if tcfg_uncond is not None else uncond_denoised).clone()
 
         fallback_weight_positive = (skimming_cfg_positive - 1) / (cond_scale - 1)
         fallback_weight_negative = (skimming_cfg_negative - 1) / (cond_scale - 1)
@@ -392,6 +465,7 @@ def _make_dual_scales_post_fn(skimming_cfg_positive: float, skimming_cfg_negativ
         return uncond + cond_scale * (cond - uncond)
 
     _fn._sd_webui_skimmed_cfg_marker = MARKER
+    _fn._sd_webui_priority = _PRIORITY
     return _fn
 
 
@@ -420,9 +494,10 @@ def apply_skimmed_cfg(unet, mode: str, **kwargs):
     """
     Register SkimmedCFG on unet, choosing the correct hook for the active backend.
 
-      * Forge Neo             -> Post-CFG, front-inserted so it runs before
-                                 MaHiRo and other post-CFG hooks.
-      * reForge / Forge Classic -> Pre-CFG (original behaviour).
+      * Forge Neo               -> Post-CFG, priority-ordered so it runs
+                                    after TCFG (consuming its stashed damped
+                                    uncond when present) and before MaHiRo.
+      * reForge / Forge Classic -> Pre-CFG (original behaviour, unchanged).
     """
     remove_skimmed_cfg_patches(unet)
 
@@ -457,10 +532,7 @@ def apply_skimmed_cfg(unet, mode: str, **kwargs):
         raise ValueError(f"Unknown SkimmedCFG mode: {mode!r}")
 
     if _is_forge_neo_backend():
-        # Front-insert so SkimmedCFG runs before MaHiRo / other post-CFG hooks.
-        key = "sampler_post_cfg_function"
-        existing = [fn for fn in unet.model_options.get(key, []) if not _is_skimmed_cfg_fn(fn)]
-        unet.model_options[key] = [post_fn] + existing
+        _priority_insert_post_cfg(unet, post_fn)
         logger.debug("[SkimmedCFG] registered post-CFG hook (Forge Neo backend), mode=%s", mode)
     else:
         unet.set_model_sampler_pre_cfg_function(pre_fn)
