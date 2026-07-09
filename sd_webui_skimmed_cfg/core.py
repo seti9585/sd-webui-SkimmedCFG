@@ -517,8 +517,8 @@ def apply_skimmed_cfg(unet, mode: str, **kwargs):
         pre_fn  = _make_replace_fn()
         post_fn = _make_replace_post_fn()
     elif mode == "lin_interp":
-        pre_fn  = _make_lin_interp_fn(kwargs["skimming_cfg"])
-        post_fn = _make_lin_interp_post_fn(kwargs["skimming_cfg"])
+        pre_fn  = _make_lin_interp_fn(kwargs["lin_interp_cfg"])
+        post_fn = _make_lin_interp_post_fn(kwargs["lin_interp_cfg"])
     elif mode == "dual_scales":
         pre_fn  = _make_dual_scales_fn(
             kwargs["skimming_cfg_positive"],
