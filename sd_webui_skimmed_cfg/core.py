@@ -4,12 +4,35 @@ sd_webui_skimmed_cfg/core.py
 Skimmed CFG core algorithm.
 
 Based on:
-    Extraltodeus/Skimmed_CFG (original, latest)
-    Panchovix/reForge-SkimmedCFG (reForge port, older)
+    Extraltodeus/Skimmed_CFG (original, current — comfy_api.latest rewrite)
 
-Key fixes vs reForge built-in:
-    1. Single Scale: cond pass now uses (cond_scale - 1) instead of cond_scale
-    2. Linear Interpolation / Dual Scales: division-by-zero protection for CFG=1
+Ported faithfully from the current upstream, which added since the previous
+port baseline:
+    1. Sigma gating on Single Scale (start_at / end_at / flip_at percentages,
+       converted to sigmas via percent_to_sigma at patch time)
+    2. Replace: the second skimming mask now uses (cond_scale - 1), matching
+       the current upstream (the previous port used cond_scale)
+
+The upstream Timed Flip (SkimFlipPreCFG) and Clean Skim (ConstantSkimPreCFG)
+nodes are intentionally NOT exposed as separate modes here. Both are Single
+Scale presets (skimming_cfg=-1, full_skim_negative=True, optionally a flipped
+filter before a flip point), and Single Scale's own controls above
+(use current CFG as skimming scale / Full Skim Negative / Flip At Percentage /
+Disable Flipping Filter) already reproduce them exactly -- ComfyUI's
+node-graph paradigm benefits from a dedicated node per preset, but a single
+WebUI panel that already exposes every underlying parameter gets no benefit
+from duplicating that as separate modes. See the README for the exact
+Single Scale settings that reproduce each preset.
+
+The upstream DifferenceCFG mode is intentionally NOT ported here either: it
+is a mask-free, reference-scale-based global CFG re-adjustment that shares
+none of this module's skimming machinery (get_skimming_mask / skimmed_CFG),
+and lives in its own extension (sd-webui-DifferenceCFG).
+
+Key fixes vs reForge built-in (Panchovix/reForge-SkimmedCFG), carried over:
+    1. Single Scale: cond pass uses (cond_scale - 1) instead of cond_scale
+    2. Linear Interpolation / Dual Scales: division-by-zero protection for
+       CFG=1
 
 Backend-adaptive hooking (same pattern as sd-webui-TCFG):
     * reForge / Forge Classic -> Pre-CFG  (dict args, "conds_out" style)
@@ -17,6 +40,19 @@ Backend-adaptive hooking (same pattern as sd-webui-TCFG):
                                   Forge Neo's pre-CFG runs before model
                                   evaluation, so cond/uncond predictions are
                                   not available there)
+
+Both backends provide "sigma" in the hook args dict (verified against
+ldm_patched/modules/samplers.py and backend/sampling/sampling_function.py),
+so sigma gating works identically on both paths.
+
+percent_to_sigma resolution (verified against actual sources):
+    * reForge / Forge Classic -> unet.get_model_object("model_sampling")
+    * Forge Neo               -> unet.model.predictor
+Both implementations share the ComfyUI boundary convention:
+percent <= 0 returns 999999999.9 (sentinel: gate never trips) and
+percent >= 1 returns 0.0. The boundaries are additionally short-circuited
+here so the default values (start=0, end=1, flip=0) never gate anything
+regardless of backend.
 
 Composition with TCFG on Forge Neo:
     TCFG and SkimmedCFG both live in Forge Neo's single
@@ -54,6 +90,9 @@ _BUILTIN_QUALNAMES = {
     "SkimmedCFGLinInterpCFGPreCFGNode.patch.<locals>.pre_cfg_patch",
     "SkimmedCFGLinInterpDualScalesCFGPreCFGNode.patch.<locals>.pre_cfg_patch",
 }
+
+# Sentinel returned by percent_to_sigma for percent <= 0 (ComfyUI convention).
+_SIGMA_SENTINEL_MAX = 999999999.9
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +174,66 @@ def _stashed_tcfg_uncond(args: dict):
 
 
 # ---------------------------------------------------------------------------
+# Sigma helpers (for percentage gating)
+# ---------------------------------------------------------------------------
+
+def _sigma_scalar(sigma) -> float:
+    """Extract a Python float from the hook args' "sigma" entry.
+
+    Both backends pass the timestep tensor (shape [batch]); the upstream
+    node reads element 0 (args["sigma"][0].item()), reproduced here with a
+    reshape so 0-dim tensors are also tolerated.
+    """
+    if isinstance(sigma, torch.Tensor):
+        return sigma.reshape(-1)[0].item()
+    return float(sigma)
+
+
+def _percent_to_sigma(unet, percent: float):
+    """ComfyUI-compatible percent -> sigma conversion for the active backend.
+
+    Boundary convention (short-circuited here so gating defaults are inert
+    on any backend): percent <= 0 -> 999999999.9, percent >= 1 -> 0.0.
+
+    Mid-range values are resolved through the first available provider:
+      1. unet.get_model_object("model_sampling")  (reForge / Forge Classic)
+      2. unet.model.predictor                     (Forge Neo)
+      3. unet.model.model_sampling                (defensive fallback)
+
+    Returns None if no provider exposing percent_to_sigma can be located;
+    callers must then substitute a value that disables the gate.
+    """
+    if percent <= 0.0:
+        return _SIGMA_SENTINEL_MAX
+    if percent >= 1.0:
+        return 0.0
+
+    candidates = []
+
+    get_obj = getattr(unet, "get_model_object", None)
+    if callable(get_obj):
+        try:
+            candidates.append(get_obj("model_sampling"))
+        except Exception:
+            pass
+
+    inner_model = getattr(unet, "model", None)
+    if inner_model is not None:
+        candidates.append(getattr(inner_model, "predictor", None))
+        candidates.append(getattr(inner_model, "model_sampling", None))
+
+    for obj in candidates:
+        if obj is not None and hasattr(obj, "percent_to_sigma"):
+            try:
+                return float(obj.percent_to_sigma(percent))
+            except Exception:
+                logger.warning("[SkimmedCFG] percent_to_sigma call failed", exc_info=True)
+                return None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Core algorithm functions
 # ---------------------------------------------------------------------------
 
@@ -179,34 +278,58 @@ def skimmed_CFG(
 
 
 # ---------------------------------------------------------------------------
-# Pre-CFG factories  (reForge / Forge Classic) -- UNCHANGED
+# Pre-CFG factories  (reForge / Forge Classic)
 # ---------------------------------------------------------------------------
 
-def _make_single_scale_fn(skimming_cfg: float, full_skim_negative: bool, disable_flipping_filter: bool):
-    """Single Scale — Pre-CFG (dict / conds_out style)."""
+def _make_single_scale_fn(
+    skimming_cfg: float,
+    full_skim_negative: bool,
+    disable_flipping_filter: bool,
+    start_at_sigma: float,
+    end_at_sigma: float,
+    flip_at_sigma: float,
+    flip_at_percentage: float,
+):
+    """Single Scale — Pre-CFG (dict / conds_out style).
+
+    Sigma gating and filter flipping match the current upstream
+    CFG_Skimming_Single_Scale_Pre_CFG.execute.pre_cfg_patch: the patch is a
+    no-op when sigma <= end_at_sigma or sigma >= start_at_sigma, and the
+    flipping filter is inverted for steps before the flip point
+    (sigma > flip_at_sigma) when flip_at_percentage > 0.
+    """
     @torch.no_grad()
     def _fn(args):
         conds_out  = args["conds_out"]
         cond_scale = args["cond_scale"]
         x_orig     = args["input"]
+        sigma      = _sigma_scalar(args["sigma"])
 
-        if not torch.any(conds_out[1]):
+        if (
+            not torch.any(conds_out[1])
+            or sigma <= end_at_sigma
+            or sigma >= start_at_sigma
+        ):
             return conds_out
 
         practical_scale = cond_scale if skimming_cfg < 0 else skimming_cfg
+
+        flip_filter = disable_flipping_filter
+        if flip_at_percentage > 0 and sigma > flip_at_sigma:
+            flip_filter = not disable_flipping_filter
 
         conds_out[1] = skimmed_CFG(
             x_orig, conds_out[1], conds_out[0],
             cond_scale,
             practical_scale if not full_skim_negative else 0,
-            disable_flipping_filter,
+            flip_filter,
         )
-        # FIX: cond pass uses (cond_scale - 1)
+        # cond pass uses (cond_scale - 1)  [matches original latest]
         conds_out[0] = skimmed_CFG(
             x_orig, conds_out[0], conds_out[1],
             cond_scale - 1,
             practical_scale,
-            disable_flipping_filter,
+            flip_filter,
         )
         return conds_out
 
@@ -215,7 +338,12 @@ def _make_single_scale_fn(skimming_cfg: float, full_skim_negative: bool, disable
 
 
 def _make_replace_fn():
-    """Replace — Pre-CFG (dict / conds_out style)."""
+    """Replace — Pre-CFG (dict / conds_out style).
+
+    The second skimming mask uses (cond_scale - 1), matching the current
+    upstream SkimReplacePreCFG (the second pass takes the uncond
+    perspective, analogous to the cond pass in Single Scale).
+    """
     @torch.no_grad()
     def _fn(args):
         conds_out  = args["conds_out"]
@@ -231,10 +359,10 @@ def _make_replace_fn():
         skim_mask = get_skimming_mask(x_orig, cond, uncond, cond_scale)
         uncond[skim_mask] = cond[skim_mask]
 
-        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale)
+        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale - 1)
         uncond[skim_mask] = cond[skim_mask]
 
-        return [cond, uncond]
+        return conds_out
 
     _fn._sd_webui_skimmed_cfg_marker = MARKER
     return _fn
@@ -311,11 +439,12 @@ def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: fl
 # Post-CFG factories  (Forge Neo)
 # ---------------------------------------------------------------------------
 # Forge Neo post-CFG args dict keys:
-#   "denoised"        — current CFG result (x0 estimate)
+#   "denoised"         — current CFG result (x0 estimate)
 #   "cond_denoised"    — positive prediction
 #   "uncond_denoised"  — negative prediction (None when CFG=1 / uncond disabled)
 #   "cond_scale"       — CFG scale
 #   "input"            — x_t (noisy latent)
+#   "sigma"            — timestep tensor (verified in sampling_function.py)
 #   "model_options"    — shared dict; read for TCFG's stashed damped uncond
 #
 # Each factory mirrors its Pre-CFG counterpart: damp cond/uncond the same
@@ -326,14 +455,29 @@ def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: fl
 # as the starting point instead of the raw uncond_denoised, reproducing the
 # reForge pipeline order (TCFG -> SkimmedCFG). If TCFG did not run (disabled
 # or not installed), behaviour is identical to before this change.
+#
+# Early returns hand back args["denoised"] unchanged, which preserves the
+# output of any earlier hook in the list (including TCFG's own combination).
 # ---------------------------------------------------------------------------
 
-def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, disable_flipping_filter: bool):
+def _make_single_scale_post_fn(
+    skimming_cfg: float,
+    full_skim_negative: bool,
+    disable_flipping_filter: bool,
+    start_at_sigma: float,
+    end_at_sigma: float,
+    flip_at_sigma: float,
+    flip_at_percentage: float,
+):
     """Single Scale — Post-CFG (Forge Neo)."""
     @torch.no_grad()
     def _fn(args):
         uncond_denoised = args.get("uncond_denoised")
         if uncond_denoised is None or not torch.any(uncond_denoised):
+            return args["denoised"]
+
+        sigma = _sigma_scalar(args["sigma"])
+        if sigma <= end_at_sigma or sigma >= start_at_sigma:
             return args["denoised"]
 
         x_orig     = args["input"]
@@ -346,17 +490,21 @@ def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, di
 
         practical_scale = cond_scale if skimming_cfg < 0 else skimming_cfg
 
+        flip_filter = disable_flipping_filter
+        if flip_at_percentage > 0 and sigma > flip_at_sigma:
+            flip_filter = not disable_flipping_filter
+
         uncond = skimmed_CFG(
             x_orig, uncond, cond,
             cond_scale,
             practical_scale if not full_skim_negative else 0,
-            disable_flipping_filter,
+            flip_filter,
         )
         cond = skimmed_CFG(
             x_orig, cond, uncond,
             cond_scale - 1,
             practical_scale,
-            disable_flipping_filter,
+            flip_filter,
         )
         return uncond + cond_scale * (cond - uncond)
 
@@ -366,7 +514,10 @@ def _make_single_scale_post_fn(skimming_cfg: float, full_skim_negative: bool, di
 
 
 def _make_replace_post_fn():
-    """Replace — Post-CFG (Forge Neo)."""
+    """Replace — Post-CFG (Forge Neo).
+
+    Second mask uses (cond_scale - 1), matching the current upstream.
+    """
     @torch.no_grad()
     def _fn(args):
         uncond_denoised = args.get("uncond_denoised")
@@ -382,7 +533,7 @@ def _make_replace_post_fn():
         skim_mask = get_skimming_mask(x_orig, cond, uncond, cond_scale)
         uncond[skim_mask] = cond[skim_mask]
 
-        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale)
+        skim_mask = get_skimming_mask(x_orig, uncond, cond, cond_scale - 1)
         uncond[skim_mask] = cond[skim_mask]
 
         return uncond + cond_scale * (cond - uncond)
@@ -490,6 +641,29 @@ def remove_skimmed_cfg_patches(unet) -> None:
             unet.model_options[key] = [fn for fn in existing if not _is_skimmed_cfg_fn(fn)]
 
 
+def _resolve_gate_sigmas(unet, start_at_percentage: float, end_at_percentage: float,
+                         flip_at_percentage: float):
+    """Convert the three gating percentages to sigmas, substituting values
+    that disable each gate when the backend conversion is unavailable."""
+    start_at_sigma = _percent_to_sigma(unet, start_at_percentage)
+    if start_at_sigma is None:
+        logger.warning("[SkimmedCFG] percent_to_sigma unavailable; start_at gating disabled")
+        start_at_sigma = _SIGMA_SENTINEL_MAX
+
+    end_at_sigma = _percent_to_sigma(unet, end_at_percentage)
+    if end_at_sigma is None:
+        logger.warning("[SkimmedCFG] percent_to_sigma unavailable; end_at gating disabled")
+        end_at_sigma = 0.0
+
+    flip_at_sigma = _percent_to_sigma(unet, flip_at_percentage)
+    if flip_at_sigma is None:
+        logger.warning("[SkimmedCFG] percent_to_sigma unavailable; flip disabled")
+        flip_at_percentage = 0.0
+        flip_at_sigma = 0.0
+
+    return start_at_sigma, end_at_sigma, flip_at_sigma, flip_at_percentage
+
+
 def apply_skimmed_cfg(unet, mode: str, **kwargs):
     """
     Register SkimmedCFG on unet, choosing the correct hook for the active backend.
@@ -498,21 +672,46 @@ def apply_skimmed_cfg(unet, mode: str, **kwargs):
                                     after TCFG (consuming its stashed damped
                                     uncond when present) and before MaHiRo.
       * reForge / Forge Classic -> Pre-CFG (original behaviour, unchanged).
+
+    Modes and their kwargs (defaults follow the current upstream nodes):
+      single_scale : skimming_cfg (-1 = use current CFG),
+                     full_skim_negative, disable_flipping_filter,
+                     start_at_percentage (0.0), end_at_percentage (1.0),
+                     flip_at_percentage (0.0)
+      replace      : (no parameters)
+      lin_interp   : lin_interp_cfg
+      dual_scales  : skimming_cfg_positive, skimming_cfg_negative
+
+    Note: upstream's Timed Flip / Clean Skim presets are not modes here --
+    they are just Single Scale with specific parameter values (see the
+    README), so there is nothing to delegate.
     """
     remove_skimmed_cfg_patches(unet)
 
     # --- build the right function for the requested mode ---
     if mode == "single_scale":
-        pre_fn  = _make_single_scale_fn(
+        start_at_sigma, end_at_sigma, flip_at_sigma, flip_at_percentage = (
+            _resolve_gate_sigmas(
+                unet,
+                float(kwargs.get("start_at_percentage", 0.0)),
+                float(kwargs.get("end_at_percentage", 1.0)),
+                float(kwargs.get("flip_at_percentage", 0.0)),
+            )
+        )
+        if 1 > flip_at_percentage > 0:
+            logger.info("[SkimmedCFG] flip at sigma: %s", round(flip_at_sigma, 2))
+
+        common = (
             kwargs["skimming_cfg"],
             kwargs["full_skim_negative"],
             kwargs["disable_flipping_filter"],
+            start_at_sigma,
+            end_at_sigma,
+            flip_at_sigma,
+            flip_at_percentage,
         )
-        post_fn = _make_single_scale_post_fn(
-            kwargs["skimming_cfg"],
-            kwargs["full_skim_negative"],
-            kwargs["disable_flipping_filter"],
-        )
+        pre_fn  = _make_single_scale_fn(*common)
+        post_fn = _make_single_scale_post_fn(*common)
     elif mode == "replace":
         pre_fn  = _make_replace_fn()
         post_fn = _make_replace_post_fn()
