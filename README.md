@@ -25,7 +25,7 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 
 | Mode | Description | Parameters |
 | ---- | ----------- | ---------- |
-| **Single Scale** | Basic skimming. Pulls over-influenced values toward the skimming scale. | Skimming CFG (−1 = use current CFG), Full Skim Negative, Disable Flipping Filter |
+| **Single Scale** | Basic skimming. Pulls over-influenced values toward the skimming scale. | Skimming CFG, Use current CFG, Full Skim Negative, Disable Flipping Filter, Start / End / Flip At |
 | **Replace** | Replaces uncond values with cond values in skimmed regions (effective scale 1 there). | — |
 | **Linear Interpolation** | Interpolates between values instead of replacing. Recommended by the original author. | Skimming CFG |
 | **Dual Scales** | Two independent scales for cond and uncond passes. | Skimming CFG Positive / Negative |
@@ -49,6 +49,10 @@ Very low scales with too few steps can occasionally fuse details.
 
 ## Parameters (Single Scale)
 
+### Skimming CFG / Use current CFG
+
+**Skimming CFG** is the fallback scale over-influenced values are pulled toward. Enabling **Use current CFG as skimming scale** makes the fallback track the session CFG instead of a fixed value; the Skimming CFG slider is greyed out while it is on. (Internally this is the upstream `-1` sentinel — the slider is just a friendlier way to expose it.)
+
 ### Full Skim Negative
 
 Forces the skimming scale to **0** on the uncond pass only, while the cond pass continues using the normal skimming scale. This maximally suppresses the uncond component in masked regions — effectively removing its outward push where it over-influences the result. Use when standard skimming still leaves burn at very high CFG.
@@ -62,6 +66,34 @@ The default mask uses three conditions (AND):
 3. `sign(denoised) == sign(denoised − x_t)` — **flipping filter**: denoised is drifting outward from the noisy input
 
 Enabling **Disable Flipping Filter** removes condition 3, widening the mask to all elements satisfying conditions 1 and 2. This applies skimming more aggressively. Try it when the default mask is too conservative.
+
+### Start At / End At Percentage
+
+Sigma gating that limits skimming to a slice of the sampling schedule, expressed as denoising progress (0 = first step, 1 = last step). Skimming is active only while progress is between **Start At** and **End At**. The defaults (Start 0.0 / End 1.0) cover the whole schedule, so skimming runs on every step unless you narrow the window.
+
+### Flip At Percentage
+
+When set above 0, the flipping filter (condition 3 above) is **inverted** for steps *before* this progress point, then behaves normally afterward. This lets the early, composition-defining steps use the opposite masking behaviour from the later, detail steps. Left at the default 0.0, the filter never flips and this control does nothing.
+
+---
+
+## Why Timed Flip / Clean Skim are not separate modes
+
+The current upstream has two extra nodes — **Timed Flip** (`SkimFlipPreCFG`) and **Clean Skim** (`ConstantSkimPreCFG`) — that this extension does **not** expose as separate modes. That is a deliberate choice, not a missing feature: both are simply Single Scale with fixed parameter values, and Single Scale's own controls above already reproduce them exactly.
+
+ComfyUI's node-graph paradigm benefits from a dedicated node per preset — a node is the natural unit there. A single WebUI panel that already surfaces every underlying parameter gains nothing from duplicating the same behaviour as extra radio choices; it would only lengthen the mode list. So the presets are documented here as Single Scale settings instead of shipped as modes.
+
+To reproduce each one:
+
+| Single Scale control | Clean Skim | Timed Flip |
+| -------------------- | ---------- | ---------- |
+| Use current CFG | ON | ON |
+| Full Skim Negative | ON | ON |
+| Disable Flipping Filter | OFF | *(the "reverse" value)* |
+| Flip At Percentage | 0.0 (default) | your flip point (upstream default 0.3) |
+| Start / End At | 0.0 / 1.0 (default) | 0.0 / 1.0 (default) |
+
+**Compatibility note:** PNGs generated while these still existed as modes (`Skimmed CFG Mode: Timed Flip` / `Clean Skim`) still paste correctly — the infotext reader maps them to Single Scale and restores the equivalent settings automatically. You do not need to reconfigure anything by hand.
 
 ---
 
@@ -164,7 +196,7 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 
 | モード | 説明 | パラメータ |
 | ---- | --- | ------ |
-| **Single Scale** | 基本のスキミング。過剰な値をスキミングスケールへ引き戻します。 | Skimming CFG（−1 で現在の CFG を使用）、Full Skim Negative、Disable Flipping Filter |
+| **Single Scale** | 基本のスキミング。過剰な値をスキミングスケールへ引き戻します。 | Skimming CFG、Use current CFG、Full Skim Negative、Disable Flipping Filter、Start / End / Flip At |
 | **Replace** | スキム対象領域で uncond を cond に置き換えます（その領域は実効スケール 1）。 | — |
 | **Linear Interpolation** | 置き換えではなく値を線形補間します。原作者の推奨モード。 | Skimming CFG |
 | **Dual Scales** | cond パスと uncond パスに個別のスケールを指定できます。 | Skimming CFG Positive / Negative |
@@ -188,6 +220,10 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 
 ## パラメータ詳細（Single Scale）
 
+### Skimming CFG / Use current CFG
+
+**Skimming CFG** は、過剰な値を引き戻す先となるフォールバックスケールです。**Use current CFG as skimming scale** を有効にすると、固定値ではなくセッション CFG に追従したフォールバックになります（有効中は Skimming CFG スライダーがグレーアウトします）。内部的には原典の `-1` センチネルに相当しますが、スライダーはそれを分かりやすく露出したものです。
+
 ### Full Skim Negative
 
 uncond パスのスキミングスケールを強制的に **0** にします（cond パスは通常通り）。マスクが当たった領域の uncond 成分を最大限に抑制し、外側へ引っ張る力をほぼゼロにします。通常のスキミングでも高 CFG の破綻が止まらない場合に試してください。
@@ -201,6 +237,34 @@ uncond パスのスキミングスケールを強制的に **0** にします（
 3. `sign(denoised) == sign(denoised − x_t)` — **フリッピングフィルタ**：denoised がノイズ入力から外側へ逸脱している
 
 **Disable Flipping Filter** を有効にすると条件 3 を外し、マスクを条件 1・2 だけで決定します。補正対象が広がり、より積極的に抑制します。デフォルトのマスクが保守的すぎると感じたときに試してください。
+
+### Start At / End At Percentage
+
+スキミングをサンプリングスケジュールの一部区間だけに限定する σ ゲートです。デノイズ進行度（0 = 最初のステップ、1 = 最後のステップ）で指定し、進行度が **Start At** と **End At** の間にあるステップでのみスキミングが有効になります。デフォルト（Start 0.0 / End 1.0）は全区間をカバーするため、窓を狭めない限り毎ステップ動作します。
+
+### Flip At Percentage
+
+0 より大きい値を設定すると、この進行度**より前**のステップだけフリッピングフィルタ（上記の条件 3）が**反転**し、それ以降は通常動作に戻ります。構図が決まる序盤のステップと、ディテールを詰める終盤のステップとで、マスクの挙動を逆にできます。デフォルトの 0.0 のままではフィルタは反転せず、このコントロールは何もしません。
+
+---
+
+## Timed Flip / Clean Skim を独立モードにしていない理由
+
+原典の現行版には **Timed Flip**（`SkimFlipPreCFG`）と **Clean Skim**（`ConstantSkimPreCFG`）という追加ノードがありますが、本拡張ではこれらを独立モードとして**用意していません**。これは機能の欠落ではなく、意図的な判断です。どちらも実体は「特定のパラメータ値に固定した Single Scale」にすぎず、上記の Single Scale のコントロールだけで完全に同じ挙動を再現できるためです。
+
+ComfyUI のノードグラフでは「1 プリセット = 1 ノード」に意味があります（ノードが自然な単位だからです）。一方、すべての基礎パラメータを既に露出している WebUI の単一パネルでは、同じ挙動を別のラジオ選択肢として複製しても得るものがなく、モード一覧が長くなるだけです。そこで本拡張では、これらを独立モードとして持たせるのではなく、Single Scale の設定として下記に記載する形にしています。
+
+各プリセットの再現方法：
+
+| Single Scale のコントロール | Clean Skim | Timed Flip |
+| --------------------------- | ---------- | ---------- |
+| Use current CFG | ON | ON |
+| Full Skim Negative | ON | ON |
+| Disable Flipping Filter | OFF | *（「反転」させたい値）* |
+| Flip At Percentage | 0.0（既定） | 任意のフリップ地点（原典の既定は 0.3） |
+| Start / End At | 0.0 / 1.0（既定） | 0.0 / 1.0（既定） |
+
+**互換性について：** これらがモードとして存在していた頃に生成した PNG（`Skimmed CFG Mode: Timed Flip` / `Clean Skim`）も、正しくペーストできます。infotext リーダーが自動的に Single Scale へ変換し、同等の設定を復元するため、手作業で設定し直す必要はありません。
 
 ---
 
