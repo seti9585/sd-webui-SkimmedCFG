@@ -45,6 +45,21 @@ The skimming scale is, in the original author's words, "how much do you like the
 Side effects: better prompt adherence, sharper images, fewer positive/negative conflicts.  
 Very low scales with too few steps can occasionally fuse details.
 
+
+### There is no neutral setting
+
+**Skimmed CFG has no value of Skimming CFG at which it becomes a no-op.** This was checked directly: on a fixed seed with the skimming scale swept across its range, no setting reproduced the disabled output bitwise, and none came close. The skimming mask is built from sign agreement between the predictions, so it selects elements to rewrite regardless of what scale those elements are then pulled toward. Setting Skimming CFG equal to the session CFG does not disable the effect; it only changes the target.
+
+To measure what this extension does to an image, **untick Enable Skimmed CFG**. Do not try to neutralise it with parameter values.
+
+This is worth stating because the sibling extension `sd-webui-DifferenceCFG`, which comes from the same upstream repository, *does* have an exact no-op point. Do not carry that assumption across.
+
+### The default of 7.0 is not a safe midpoint
+
+The default Skimming CFG of 7.0 sits at the steepest part of the response curve. Measured on a fixed seed, the interval between 6.5 and 7.0 produced the largest change per unit of any part of the range, so small adjustments near the default move the image more than the same adjustment made anywhere else.
+
+The scale is also designed for the upstream operating range of roughly **CFG 6 to 32 and above**. At a session CFG of 7 the whole axis is compressed and the useful travel is short. If you work at low CFG, expect the slider to feel abrupt, and prefer changes of 0.5 or smaller near the default.
+
 ---
 
 ## Parameters (Single Scale)
@@ -149,13 +164,28 @@ In practice (verified on reForge + SDXL, CFG 30, 35 steps), roughly **40–44 % 
 
 ## Compatibility with other extensions
 
-Tested together with **TCFG** and **MaHiRo**. The execution order on reForge is:
+The execution order across the suite on reForge is:
 
 ```
-TCFG (Pre-CFG, priority 13) → SkimmedCFG (Pre-CFG, priority 14) → CFG → MaHiRo (Post-CFG, priority 15.5)
+TCFG (13.0) → SkimmedCFG (14.0) → DifferenceCFG (14.2) → APG (14.5) → CFG
+  → CFGZeroStar (15.0) → FreSca (15.2) → MaHiRo (15.5) → CFGNorm (16.0) → CFGRegulator (16.5)
 ```
 
 No conflicts observed. When stacking multiple CFG-axis extensions, keep CFG at **7–15**; values above 20 can cause cumulative overcorrection.
+
+Note that both this extension and DifferenceCFG rewrite the unconditional prediction, and DifferenceCFG runs immediately after. The interaction of two such rewrites in the same chain has not been measured; if results look over-corrected, disable one at a time to isolate the cause before adjusting values.
+
+### Chain ordering and the debug dump
+
+Forge-derived backends append pre-CFG hooks in registration order, which is effectively alphabetical and shifts with whatever else is installed. This extension inserts itself at priority 14.0 instead. Note that this is separate from `sorting_priority`, which controls only the accordion's position in the UI.
+
+Set `SD_WEBUI_SETI_DEBUG=1` before launching to have the assembled chain printed at sampling time:
+
+```
+[SkimmedCFG] pre-CFG chain: _tcfg_pre_cfg_fn(13.0) -> _skimmedcfg_pre_cfg_fn(14.0)
+```
+
+If a hook you expected is missing, that extension is not enabled or failed to register. If the order differs from the list above, something in the chain is not participating in priority insertion.
 
 ---
 
@@ -215,6 +245,21 @@ https://github.com/seti9585/sd-webui-SkimmedCFG
 
 副作用：プロンプト追従の向上、よりシャープな画像、ポジ／ネガの衝突の減少。  
 スケールが低すぎてステップ数も少ない場合、ディテールが稀に融合することがあります。
+
+
+### 無効化される設定は存在しない
+
+**Skimmed CFG には、Skimming CFG をどの値にしても効果が無効化される点がありません。** これは実測で確認しています。固定シードでスキミングスケールを全域にわたって走査しましたが、無効時の出力をビット単位で再現する設定は存在せず、近づく設定もありませんでした。スキミングマスクは予測同士の符号一致から構築されるため、書き換える要素の選別は、その要素をどのスケールへ引き寄せるかとは無関係に行われます。Skimming CFG をセッション CFG と等しくしても効果は消えず、引き寄せ先が変わるだけです。
+
+本拡張機能が画像に何をしているかを測るには、**Enable Skimmed CFG のチェックを外してください。** パラメータ値で無効化しようとしないでください。
+
+これを明記するのは、同じ上流リポジトリ由来の姉妹拡張 `sd-webui-DifferenceCFG` には厳密な無効化点が*存在する*ためです。一方の前提を他方へ引き継がないでください。
+
+### 既定値 7.0 は安全な中間点ではない
+
+Skimming CFG の既定値 7.0 は、応答曲線の最も急峻な部分に位置しています。固定シードでの実測では、6.5 から 7.0 の区間が全域で単位あたりの変化量が最大でした。既定値付近での小さな調整は、同じ幅の調整を他のどこで行うよりも画像を大きく動かします。
+
+またこのスケールは、上流が想定する **CFG 6 から 32 以上**の運用域に向けて設計されています。セッション CFG 7 では軸全体が圧縮され、実用的な可動域が短くなります。低い CFG で使う場合、スライダは急峻に感じられるはずです。既定値付近では 0.5 以下の刻みで調整することをお勧めします。
 
 ---
 
@@ -320,13 +365,28 @@ cond[mask] −= (denoised − low)[mask] / cfg_scale
 
 ## 他拡張との併用
 
-**TCFG**・**MaHiRo** との同時使用を確認済みです。reForge での実行順序：
+reForge でのスイート全体の実行順序：
 
 ```
-TCFG（Pre-CFG、priority 13）→ SkimmedCFG（Pre-CFG、priority 14）→ CFG → MaHiRo（Post-CFG、priority 15.5）
+TCFG (13.0) → SkimmedCFG (14.0) → DifferenceCFG (14.2) → APG (14.5) → CFG
+  → CFGZeroStar (15.0) → FreSca (15.2) → MaHiRo (15.5) → CFGNorm (16.0) → CFGRegulator (16.5)
 ```
 
 干渉は確認されていません。CFG 軸の拡張を複数重ねる場合は **CFG 7〜15** 以内を推奨します。20 以上では累積補正が大きくなる場合があります。
+
+なお本拡張機能と DifferenceCFG はいずれも無条件予測を書き換えており、DifferenceCFG は直後に実行されます。同一チェーン内で 2 つの書き換えが相互作用した場合の挙動は未測定です。過補正に見える場合は、値を調整する前に 1 つずつ無効化して原因を切り分けてください。
+
+### チェーン順序とデバッグダンプ
+
+Forge 系バックエンドは pre-CFG フックを登録順に追加します。これは実質的にアルファベット順であり、他に何がインストールされているかによって変動します。本拡張機能は代わりに優先度 14.0 の位置へ自身を挿入します。これは `sorting_priority` とは別物である点に注意してください。`sorting_priority` は UI 上のアコーディオンの位置のみを制御します。
+
+起動前に `SD_WEBUI_SETI_DEBUG=1` を設定すると、サンプリング時に組み立てられたチェーンが出力されます。
+
+```
+[SkimmedCFG] pre-CFG chain: _tcfg_pre_cfg_fn(13.0) -> _skimmedcfg_pre_cfg_fn(14.0)
+```
+
+想定していたフックが現れない場合、その拡張機能が有効化されていないか、登録に失敗しています。順序が上記の一覧と異なる場合、チェーン内のいずれかが優先度挿入に参加していません。
 
 ---
 
@@ -339,6 +399,32 @@ A1111 非対応（`forge_objects` バックエンドが必要）。
 
 ---
 
-## ライセンス
+## Acknowledgements / 謝辞
 
-MIT License — Original algorithm © Extraltodeus (reForge adaptation: Panchovix)
+**Extraltodeus**
+
+The Skimmed CFG algorithm is the work of [**Extraltodeus**](https://github.com/Extraltodeus), published in [Skimmed_CFG](https://github.com/Extraltodeus/Skimmed_CFG). This extension exists only because that work exists.
+
+Skimmed CFG のアルゴリズムは [**Extraltodeus**](https://github.com/Extraltodeus) 氏によるもので、[Skimmed_CFG](https://github.com/Extraltodeus/Skimmed_CFG) として公開されています。本拡張機能は同氏の成果があってはじめて成立しています。
+
+**Shiba-2-shiba**
+
+Development of this whole extension suite started from the articles and Forge Classic implementation of [**Shiba-2-shiba**](https://note.com/gentle_murre488). Sincere thanks.
+
+本拡張スイート全体の開発は、[**Shiba-2-shiba**](https://note.com/gentle_murre488) 氏の記事および Forge Classic 向け実装をきっかけに始まりました。深く感謝します。
+
+---
+
+## License / ライセンス
+
+**Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Copyright (c) 2026 seti9585
+
+This extension is a port of the Skimmed CFG algorithm from [Extraltodeus/Skimmed_CFG](https://github.com/Extraltodeus/Skimmed_CFG), which is licensed under the Apache License 2.0. `get_skimming_mask()`, `skimmed_CFG()` and all four mode bodies are ported without algorithmic change, so this is a derivative work and is distributed under the same licence. The modifications made in porting it are recorded in `NOTICE` as the licence requires.
+
+Earlier revisions of this file stated MIT and named Panchovix's reForge adaptation alongside the original. Both were wrong. Apache-2.0 code cannot be redistributed under MIT, and the licence additionally requires the licence text and a change notice to travel with the derivative; neither file was present. Panchovix's `reForge-SkimmedCFG` carries no licence file of its own and is not the source this port follows. This has been corrected.
+
+本拡張機能は [Extraltodeus/Skimmed_CFG](https://github.com/Extraltodeus/Skimmed_CFG) の Skimmed CFG アルゴリズムを移植したものです。同リポジトリは Apache License 2.0 でライセンスされています。`get_skimming_mask()`、`skimmed_CFG()` および 4 モードの本体はすべてアルゴリズムを変更せずに移植しているため、本拡張機能は派生物であり、同一ライセンスで配布します。移植にあたって加えた変更は、ライセンスの要求に従い `NOTICE` に記録しています。
+
+本ファイルの以前の版は MIT を表示し、原作者と並べて Panchovix 氏の reForge 向け改変を挙げていました。いずれも誤りです。Apache-2.0 のコードを MIT で再配布することはできず、さらに同ライセンスはライセンス本文と変更告知が派生物とともに配布されることを要求しますが、どちらのファイルも存在しませんでした。また Panchovix 氏の `reForge-SkimmedCFG` にはライセンスファイルが存在せず、本移植が追随している出典でもありません。以上により訂正しました。
