@@ -1,0 +1,90 @@
+sd-webui-SkimmedCFG
+Copyright (c) 2026 seti9585
+
+This product includes software developed by Extraltodeus.
+
+  Skimmed_CFG
+  https://github.com/Extraltodeus/Skimmed_CFG
+  Copyright (c) Extraltodeus
+  Licensed under the Apache License, Version 2.0
+
+The Skimmed CFG algorithm implemented here is a port of that project. The
+following files contain code derived from the upstream work:
+
+  sd_webui_skimmed_cfg/core.py
+
+Specifically, get_skimming_mask() and skimmed_CFG() are ported verbatim, and
+the bodies of all four modes follow the corresponding upstream nodes without
+algorithmic change:
+
+  Single Scale         <- CFG_Skimming_Single_Scale_Pre_CFG
+  Replace              <- SkimReplacePreCFG
+  Linear Interpolation <- SkimmedCFG_LinInterp_CFG_PreCFG
+  Dual Scales          <- SkimmedCFG_LinInterp_DualScales_CFG_PreCFG
+
+This includes the three sign-agreement conditions that build the skimming
+mask, the flipping-filter branch, the sigma gating on Single Scale, the use
+of (cond_scale - 1) on the Single Scale cond pass and on the second Replace
+mask, the fallback_weight computations, the division-by-zero guard at
+cond_scale <= 1 and the order in which the negative and positive weights are
+applied in Dual Scales.
+
+
+MODIFICATIONS
+=============
+
+The following changes were made to the upstream work in the course of
+porting it to Forge-derived Stable Diffusion WebUIs. None of them alter the
+algorithm itself.
+
+  * Ported from ComfyUI node classes to a WebUI Script extension. The node
+    schemas are replaced by a single Gradio panel with a mode selector, and
+    model patching goes through forge_objects.unet rather than a cloned
+    ComfyUI model object.
+
+  * Added a Forge Neo code path. Forge Neo's pre-CFG hook fires before model
+    evaluation, so the conditional and unconditional predictions are not
+    available there; on that backend the extension registers a post-CFG hook
+    instead and reconstructs the equivalent result. Where sd-webui-TCFG is
+    active and ordered ahead of this extension, the post-CFG path reads the
+    damped unconditional prediction TCFG stashes in model_options; otherwise
+    it falls back to the raw unconditional prediction.
+
+  * Added priority-based hook insertion. Forge-derived backends append
+    pre-CFG hooks in registration order, which is effectively alphabetical
+    and varies with the set of installed extensions. This extension inserts
+    itself at priority 14.0 so that the assembled chain does not depend on
+    what else happens to be present.
+
+  * Added a chain dump, emitted at sampling time when the environment
+    variable SD_WEBUI_SETI_DEBUG is set to 1, replacing the upstream nodes'
+    ANSI-coloured startup prints.
+
+  * Replaced the direct model_sampling.percent_to_sigma() calls with a helper
+    that resolves the sigma schedule across the supported backends, reading
+    unet.get_model_object("model_sampling") on reForge and Forge Classic and
+    unet.model.predictor on Forge Neo. The percent boundaries are additionally
+    short-circuited so that the default values never gate anything regardless
+    of backend.
+
+  * Converted the sigma argument to a Python float through a helper rather
+    than indexing the tensor directly.
+
+  * Did not port the upstream SkimFlipPreCFG (Timed Flip) and
+    ConstantSkimPreCFG (Clean Skim) nodes as separate modes. Both are Single
+    Scale with fixed parameter values, which the Single Scale controls
+    already reproduce exactly; the equivalent settings are documented in
+    README.md. Infotext written while these existed as modes is still read
+    correctly and mapped back onto Single Scale.
+
+  * Did not port the upstream DifferenceCFG_PreCFG node. It shares none of
+    the skimming machinery in this module and lives in a separate extension,
+    sd-webui-DifferenceCFG.
+
+  * Added PNG infotext round-trip support using the "Skimmed CFG" key prefix,
+    including the legacy-mode mapping described above, and XYZ Grid axes for
+    the enabled flag and the mode selector.
+
+  * Added exception handling around the hooks so that an internal failure
+    returns the unmodified standard CFG output rather than aborting
+    generation.
