@@ -171,9 +171,13 @@ TCFG (13.0) → SkimmedCFG (14.0) → DifferenceCFG (14.2) → APG (14.5) → CF
   → CFGZeroStar (15.0) → FreSca (15.2) → MaHiRo (15.5) → CFGNorm (16.0) → CFGRegulator (16.5)
 ```
 
-No conflicts observed. When stacking multiple CFG-axis extensions, keep CFG at **7–15**; values above 20 can cause cumulative overcorrection.
+No known compatibility failures: no crashes, no black images, no hook registration conflicts. That is a separate statement from how the extensions affect each other numerically, which is covered below.
 
-Note that both this extension and DifferenceCFG rewrite the unconditional prediction, and DifferenceCFG runs immediately after. The interaction of two such rewrites in the same chain has not been measured; if results look over-corrected, disable one at a time to isolate the cause before adjusting values.
+Both this extension and DifferenceCFG rewrite the unconditional prediction, and DifferenceCFG runs immediately after, so it receives an uncond this extension has already modified. The interaction of two such rewrites in the same chain has not been measured. If results look over-corrected, disable one at a time to isolate the cause before adjusting values.
+
+When several CFG-axis extensions are active at once, each applies its own correction to the same guidance term and the corrections accumulate. Calibration values obtained with a single extension active are not guaranteed to hold in a stacked configuration, and the accumulated correction generally grows as the session CFG scale rises. If you stack extensions at high CFG, re-check your parameter values against a fixed-seed reference rather than carrying over single-extension settings.
+
+No specific "safe range" is given here, because the appropriate range depends on which extensions are stacked and on the model in use. For this extension on its own, the upstream operating domain is roughly CFG 6 to 32 and above; the measurement quoted in the Algorithm section was taken at CFG 30.
 
 ### Chain ordering and the debug dump
 
@@ -372,9 +376,13 @@ TCFG (13.0) → SkimmedCFG (14.0) → DifferenceCFG (14.2) → APG (14.5) → CF
   → CFGZeroStar (15.0) → FreSca (15.2) → MaHiRo (15.5) → CFGNorm (16.0) → CFGRegulator (16.5)
 ```
 
-干渉は確認されていません。CFG 軸の拡張を複数重ねる場合は **CFG 7〜15** 以内を推奨します。20 以上では累積補正が大きくなる場合があります。
+既知の互換性上の不具合はありません。クラッシュ、黒画像、フック登録の失敗はいずれも確認されていません。これは拡張どうしが数値的にどう影響し合うかとは別の話で、その点は以下に記します。
 
-なお本拡張機能と DifferenceCFG はいずれも無条件予測を書き換えており、DifferenceCFG は直後に実行されます。同一チェーン内で 2 つの書き換えが相互作用した場合の挙動は未測定です。過補正に見える場合は、値を調整する前に 1 つずつ無効化して原因を切り分けてください。
+本拡張機能と DifferenceCFG はいずれも無条件予測を書き換えており、DifferenceCFG は直後に実行されるため、本拡張機能が書き換えたあとの uncond を受け取ります。同一チェーン内で 2 つの書き換えが相互作用した場合の挙動は未測定です。過補正に見える場合は、値を調整する前に 1 つずつ無効化して原因を切り分けてください。
+
+CFG 軸に作用する拡張を同時に複数有効にすると、それぞれが同じガイダンス項へ個別の補正を加え、補正は累積します。単独で較正して得た値が併用時にもそのまま通用する保証はなく、累積補正の量はセッション CFG が高いほど大きくなる傾向があります。高い CFG で複数の拡張を積む場合は、単独時の設定をそのまま持ち込まず、固定シードの参照カットと突き合わせて値を取り直してください。
+
+ここで特定の「安全な範囲」を示していないのは、適切な範囲が併用する拡張の組み合わせと使用モデルに依存するためです。本拡張機能を単独で使う場合、上流が想定する運用域はおおむね CFG 6 から 32 以上で、アルゴリズムの節に記載した実測値は CFG 30 で取得しています。
 
 ### チェーン順序とデバッグダンプ
 
