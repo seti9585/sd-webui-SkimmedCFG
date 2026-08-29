@@ -4,7 +4,7 @@ sd_webui_skimmed_cfg/core.py
 Skimmed CFG core algorithm.
 
 Based on:
-    Extraltodeus/Skimmed_CFG (original, current — comfy_api.latest rewrite)
+    Extraltodeus/Skimmed_CFG (original, current - comfy_api.latest rewrite)
 
 Ported faithfully from the current upstream, which added since the previous
 port baseline:
@@ -392,7 +392,7 @@ def _make_single_scale_fn(
     flip_at_sigma: float,
     flip_at_percentage: float,
 ):
-    """Single Scale — Pre-CFG (dict / conds_out style).
+    """Single Scale - Pre-CFG (dict / conds_out style).
 
     Sigma gating and filter flipping match the current upstream
     CFG_Skimming_Single_Scale_Pre_CFG.execute.pre_cfg_patch: the patch is a
@@ -446,7 +446,7 @@ def _make_single_scale_fn(
 
 
 def _make_replace_fn():
-    """Replace — Pre-CFG (dict / conds_out style).
+    """Replace - Pre-CFG (dict / conds_out style).
 
     The second skimming mask uses (cond_scale - 1), matching the current
     upstream SkimReplacePreCFG (the second pass takes the uncond
@@ -483,7 +483,7 @@ def _make_replace_fn():
 
 
 def _make_lin_interp_fn(skimming_cfg: float):
-    """Linear Interpolation — Pre-CFG (dict / conds_out style)."""
+    """Linear Interpolation - Pre-CFG (dict / conds_out style)."""
     @torch.no_grad()
     def _fn(args):
         _maybe_dump_chain(args)
@@ -522,7 +522,7 @@ def _make_lin_interp_fn(skimming_cfg: float):
 
 
 def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: float):
-    """Dual Scales — Pre-CFG (dict / conds_out style)."""
+    """Dual Scales - Pre-CFG (dict / conds_out style)."""
     @torch.no_grad()
     def _fn(args):
         _maybe_dump_chain(args)
@@ -565,13 +565,13 @@ def _make_dual_scales_fn(skimming_cfg_positive: float, skimming_cfg_negative: fl
 # Post-CFG factories  (Forge Neo)
 # ---------------------------------------------------------------------------
 # Forge Neo post-CFG args dict keys:
-#   "denoised"         — current CFG result (x0 estimate)
-#   "cond_denoised"    — positive prediction
-#   "uncond_denoised"  — negative prediction (None when CFG=1 / uncond disabled)
-#   "cond_scale"       — CFG scale
-#   "input"            — x_t (noisy latent)
-#   "sigma"            — timestep tensor (verified in sampling_function.py)
-#   "model_options"    — shared dict; read for TCFG's stashed damped uncond
+#   "denoised"         - current CFG result (x0 estimate)
+#   "cond_denoised"    - positive prediction
+#   "uncond_denoised"  - negative prediction (None when CFG=1 / uncond disabled)
+#   "cond_scale"       - CFG scale
+#   "input"            - x_t (noisy latent)
+#   "sigma"            - timestep tensor (verified in sampling_function.py)
+#   "model_options"    - shared dict; read for TCFG's stashed damped uncond
 #
 # Each factory mirrors its Pre-CFG counterpart: damp cond/uncond the same
 # way, then recompute CFG linearly:
@@ -595,7 +595,7 @@ def _make_single_scale_post_fn(
     flip_at_sigma: float,
     flip_at_percentage: float,
 ):
-    """Single Scale — Post-CFG (Forge Neo)."""
+    """Single Scale - Post-CFG (Forge Neo)."""
     @torch.no_grad()
     def _fn(args):
         uncond_denoised = args.get("uncond_denoised")
@@ -641,7 +641,7 @@ def _make_single_scale_post_fn(
 
 
 def _make_replace_post_fn():
-    """Replace — Post-CFG (Forge Neo).
+    """Replace - Post-CFG (Forge Neo).
 
     Second mask uses (cond_scale - 1), matching the current upstream.
     """
@@ -672,7 +672,7 @@ def _make_replace_post_fn():
 
 
 def _make_lin_interp_post_fn(skimming_cfg: float):
-    """Linear Interpolation — Post-CFG (Forge Neo)."""
+    """Linear Interpolation - Post-CFG (Forge Neo)."""
     @torch.no_grad()
     def _fn(args):
         uncond_denoised = args.get("uncond_denoised")
@@ -711,7 +711,7 @@ def _make_lin_interp_post_fn(skimming_cfg: float):
 
 
 def _make_dual_scales_post_fn(skimming_cfg_positive: float, skimming_cfg_negative: float):
-    """Dual Scales — Post-CFG (Forge Neo)."""
+    """Dual Scales - Post-CFG (Forge Neo)."""
     @torch.no_grad()
     def _fn(args):
         uncond_denoised = args.get("uncond_denoised")
