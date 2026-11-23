@@ -372,6 +372,10 @@ class SkimmedCFGScript(scripts.Script):
         self.mode = cfg["mode"]
 
         if not cfg["enabled"]:
+            if _has_forge_backend(p):
+                unet = p.sd_model.forge_objects.unet.clone()
+                remove_skimmed_cfg_patches(unet)
+                p.sd_model.forge_objects.unet = unet
             return
 
         if not _has_forge_backend(p):

@@ -1,0 +1,9 @@
+HISTORICAL RECORD: Results below describe the earlier build. See VALIDATION_2026-11-17.md for current status.
+
+<user-profile>\Documents\Codex\2026-10-25\DifferenceCFG-ContractRepair\test-env\Lib\site-packages\torch\_subclasses\functional_tensor.py:368: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\utils\tensor_numpy.cpp:84.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+inference= False observer_state= APPLIED observer_error= None
+consumer_status= AUTO_APPLIED reference= 3.0
+inference= True observer_state= ERROR observer_error= RuntimeError
+Exact failed operation: cond._version -> Inference tensors do not track version counter.
+consumer_status= AUTO_CONTRACT_INVALID reference= None

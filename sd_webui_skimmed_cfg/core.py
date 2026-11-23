@@ -765,6 +765,7 @@ def _is_skimmed_cfg_fn(fn) -> bool:
 
 def remove_skimmed_cfg_patches(unet) -> None:
     """Remove all SkimmedCFG patches from both pre- and post-CFG lists."""
+    unet.model_options.pop("_seti_skimmedcfg_auto_v1", None)
     for key in ("sampler_pre_cfg_function", "sampler_post_cfg_function"):
         existing = unet.model_options.get(key)
         if isinstance(existing, list):
@@ -870,6 +871,9 @@ def apply_skimmed_cfg(unet, mode: str, **kwargs):
         # v1.1: priority-ordered insertion replaces the plain append that
         # set_model_sampler_pre_cfg_function performs. See
         # _priority_insert_pre_cfg for why.
+        from .observation import observe_hook
+        gates = (start_at_sigma, end_at_sigma) if mode == "single_scale" else (0, 0)
+        pre_fn = observe_hook(pre_fn, mode, kwargs, gates)
         _priority_insert_pre_cfg(unet, pre_fn)
         _emit(1, "registered pre-CFG hook (reForge / Forge Classic), "
                  "mode=%s priority=%s", mode, _PRIORITY)

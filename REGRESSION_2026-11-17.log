@@ -1,0 +1,77 @@
+test_auto_bounds_and_actual_budget (test_auto_reference.AutoTests.test_auto_bounds_and_actual_budget) ... ok
+test_budget_scalar_boundaries (test_auto_reference.AutoTests.test_budget_scalar_boundaries) ... ok
+test_consumed_record_cannot_be_replayed (test_auto_reference.AutoTests.test_consumed_record_cannot_be_replayed) ... ok
+test_contract_rejects_stale_mismatched_and_reordered (test_auto_reference.AutoTests.test_contract_rejects_stale_mismatched_and_reordered) ... ok
+test_disable_clears_records_and_hooks (test_auto_reference.AutoTests.test_disable_clears_records_and_hooks) ... ok
+test_gate_consumes_record (test_auto_reference.AutoTests.test_gate_consumes_record) ... ok
+test_linear_relation_and_equal_reference (test_auto_reference.AutoTests.test_linear_relation_and_equal_reference) ... ok
+test_manual_all_methods_exact (test_auto_reference.AutoTests.test_manual_all_methods_exact) ... ok
+test_missing_uncond_and_empty_tensor (test_auto_reference.AutoTests.test_missing_uncond_and_empty_tensor) ... ok
+test_neo_reports_manual_fallback (test_auto_reference.AutoTests.test_neo_reports_manual_fallback) ... [DifferenceCFG] MANUAL_FALLBACK_UNSUPPORTED: Auto is Pre-CFG only
+ok
+test_no_skim_and_old_skim (test_auto_reference.AutoTests.test_no_skim_and_old_skim) ... ok
+test_nonfinite_and_unknown_algorithm (test_auto_reference.AutoTests.test_nonfinite_and_unknown_algorithm) ... ok
+test_observation_failure_preserves_original (test_auto_reference.AutoTests.test_observation_failure_preserves_original) ... ok
+test_observation_is_exact_for_settings_and_gates (test_auto_reference.AutoTests.test_observation_is_exact_for_settings_and_gates) ... ok
+test_old_png_defaults_off (test_auto_reference.AutoTests.test_old_png_defaults_off) ... ok
+test_skim_gate_and_cfg_one (test_auto_reference.AutoTests.test_skim_gate_and_cfg_one) ... ok
+test_ui_metadata_roundtrip_with_stub_host (test_auto_reference.AutoTests.test_ui_metadata_roundtrip_with_stub_host) ... ok
+test_unsupported_modes_methods (test_auto_reference.AutoTests.test_unsupported_modes_methods) ... ok
+test_zero_constant_and_current_cfg (test_auto_reference.AutoTests.test_zero_constant_and_current_cfg) ... ok
+test_fresh_ui_defaults_and_config_exclusion (test_budget_ui.BudgetUITests.test_fresh_ui_defaults_and_config_exclusion) ... ok
+test_internal_api_range_and_implicit_default_unchanged (test_budget_ui.BudgetUITests.test_internal_api_range_and_implicit_default_unchanged) ... ok
+test_invalid_metadata_uses_safe_ui_default_with_warning (test_budget_ui.BudgetUITests.test_invalid_metadata_uses_safe_ui_default_with_warning) ... ok
+test_legacy_large_budget_restore_without_clipping (test_budget_ui.BudgetUITests.test_legacy_large_budget_restore_without_clipping) ... ok
+test_metadata_roundtrip_keeps_manual_and_legacy_values (test_budget_ui.BudgetUITests.test_metadata_roundtrip_keeps_manual_and_legacy_values) ... ok
+test_missing_old_metadata_keeps_implicit_budget_and_auto_off (test_budget_ui.BudgetUITests.test_missing_old_metadata_keeps_implicit_budget_and_auto_off) ... ok
+test_normal_restore_resets_expanded_bounds (test_budget_ui.BudgetUITests.test_normal_restore_resets_expanded_bounds) ... ok
+test_preserve_legacy_values_between_new_steps (test_budget_ui.BudgetUITests.test_preserve_legacy_values_between_new_steps) ... ok
+test_upstream_paste_function_passes_range_update (test_budget_ui.BudgetUITests.test_upstream_paste_function_passes_range_update) ... <unknown>:19: SyntaxWarning: invalid escape sequence '\('
+ok
+test_upstream_ui_config_cannot_override_budget (test_budget_ui.BudgetUITests.test_upstream_ui_config_cannot_override_budget) ... ok
+test_contract_details_console_png_and_request_reset (test_contract_repair.ContractRepairTests.test_contract_details_console_png_and_request_reset) ... ok
+test_individual_contract_reason_codes (test_contract_repair.ContractRepairTests.test_individual_contract_reason_codes) ... ok
+test_inference_mutations_are_rejected_not_ignored (test_contract_repair.ContractRepairTests.test_inference_mutations_are_rejected_not_ignored) ... ok
+test_inference_outputs_equal_versioned_path (test_contract_repair.ContractRepairTests.test_inference_outputs_equal_versioned_path) ... ok
+test_inference_snapshot_required_and_must_not_alias (test_contract_repair.ContractRepairTests.test_inference_snapshot_required_and_must_not_alias) ... ok
+test_legacy_observer_error_is_visible (test_contract_repair.ContractRepairTests.test_legacy_observer_error_is_visible) ... ok
+test_no_extra_host_transfer_for_snapshot_check (test_contract_repair.ContractRepairTests.test_no_extra_host_transfer_for_snapshot_check) ... ok
+test_observer_preserves_exception_phase_and_message (test_contract_repair.ContractRepairTests.test_observer_preserves_exception_phase_and_message) ... ok
+test_reproduces_16_invalid_14_gate_and_repairs_same_inputs (test_contract_repair.ContractRepairTests.test_reproduces_16_invalid_14_gate_and_repairs_same_inputs) ... ok
+test_empty_and_invalid_values_do_not_sync (test_diagnostics.DiagnosticTests.test_empty_and_invalid_values_do_not_sync) ... ok
+test_exact_summary_and_floor_denominator (test_diagnostics.DiagnosticTests.test_exact_summary_and_floor_denominator) ... ok
+test_floor_tolerance_and_per_call_floor (test_diagnostics.DiagnosticTests.test_floor_tolerance_and_per_call_floor) ... ok
+test_generation_reset_and_batch_metadata_snapshot (test_diagnostics.DiagnosticTests.test_generation_reset_and_batch_metadata_snapshot) ... ok
+test_interrupted_generation_and_neo_do_not_leak (test_diagnostics.DiagnosticTests.test_interrupted_generation_and_neo_do_not_leak) ... [DifferenceCFG] MANUAL_FALLBACK_UNSUPPORTED: Auto is Pre-CFG only
+ok
+test_no_additional_tensor_scalar_or_transfer_calls (test_diagnostics.DiagnosticTests.test_no_additional_tensor_scalar_or_transfer_calls) ... ok
+test_only_auto_applied_contributes (test_diagnostics.DiagnosticTests.test_only_auto_applied_contributes) ... ok
+test_outputs_and_statistics_match_prechange_auto (test_diagnostics.DiagnosticTests.test_outputs_and_statistics_match_prechange_auto) ... ok
+test_solver_ast_and_constants_unchanged (test_diagnostics.DiagnosticTests.test_solver_ast_and_constants_unchanged) ... ok
+test_zero_applied_prints_na_and_manual_does_not_add_stats (test_diagnostics.DiagnosticTests.test_zero_applied_prints_na_and_manual_does_not_add_stats) ... ok
+test_auto_cfg20_li3_actual_length_and_alignment_budget (test_linear_interpolation.LinearInterpolationTests.test_auto_cfg20_li3_actual_length_and_alignment_budget) ... ok
+test_linear_interpolation_has_no_single_scale_gate (test_linear_interpolation.LinearInterpolationTests.test_linear_interpolation_has_no_single_scale_gate) ... ok
+test_manual_cfg20_li3_all_methods (test_linear_interpolation.LinearInterpolationTests.test_manual_cfg20_li3_all_methods) ... ok
+test_missing_uncond_and_nonfinite_record (test_linear_interpolation.LinearInterpolationTests.test_missing_uncond_and_nonfinite_record) ... ok
+test_observation_preserves_both_mask_passes (test_linear_interpolation.LinearInterpolationTests.test_observation_preserves_both_mask_passes) ... ok
+test_prior_algorithm_keeps_linear_interpolation_manual (test_linear_interpolation.LinearInterpolationTests.test_prior_algorithm_keeps_linear_interpolation_manual) ... ok
+test_single_scale_v1_and_v2_remain_identical (test_linear_interpolation.LinearInterpolationTests.test_single_scale_v1_and_v2_remain_identical) ... ok
+test_unknown_or_mismatched_mode_is_not_accepted (test_linear_interpolation.LinearInterpolationTests.test_unknown_or_mismatched_mode_is_not_accepted) ... ok
+test_zero_budget_and_targets_at_or_above_cfg (test_linear_interpolation.LinearInterpolationTests.test_zero_budget_and_targets_at_or_above_cfg) ... ok
+
+----------------------------------------------------------------------
+Ran 57 tests in 3.969s
+
+OK
+Auto matrix: applied=67, safe-rejected=13, cases=120
+Individually exercised contract checks: 32
+Inference/versioned output equivalence cases: 32
+Host scalar/transfer calls, versioned == inference: {'__float__': 2, '__bool__': 3, 'tolist': 2}
+Synthetic 16-active/14-gated inference replay, old=True: {'AUTO_CONTRACT_INVALID': 16, 'DIFF_GATE_OFF': 14}
+Synthetic 16-active/14-gated inference replay, old=False: {'AUTO_APPLIED': 16, 'DIFF_GATE_OFF': 14}
+Tensor conversion/transfer call counts unchanged, budget 0 : {'__float__': 2, '__bool__': 2, 'to': 12, 'tolist': 1}
+Tensor conversion/transfer call counts unchanged, budget 0.1 : {'__float__': 2, '__bool__': 3, 'to': 15, 'tolist': 2}
+Tensor conversion/transfer call counts unchanged, budget 1 : {'__float__': 2, '__bool__': 3, 'to': 15, 'tolist': 2}
+Diagnostic before/after output equivalence cases: 96
+Linear Interpolation Auto CFG20/LI3 cases=144: {'AUTO_APPLIED': 144}
+Linear Interpolation manual exact cases: 128
